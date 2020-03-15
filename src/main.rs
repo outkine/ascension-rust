@@ -8,19 +8,19 @@ use ggez::{graphics, Context, ContextBuilder, GameResult};
 use ggez::graphics::spritebatch::SpriteBatch;
 use na::{Point2, Vector2};
 use ncollide2d::shape::{Cuboid, ShapeHandle};
-use nphysics2d::algebra::{ForceType, Velocity2};
+use nphysics2d::algebra::{Force2, ForceType, Velocity2};
 use nphysics2d::force_generator::DefaultForceGeneratorSet;
 use nphysics2d::joint::DefaultJointConstraintSet;
 use nphysics2d::math::{Inertia, Velocity};
-use nphysics2d::object;
 use nphysics2d::object::{
     Body, BodyHandle, BodyPart, BodyPartHandle, BodySet, BodyStatus, ColliderDesc, ColliderHandle,
-    ColliderSet, DefaultBodyHandle, DefaultBodySet, DefaultColliderSet, Ground, RigidBody,
-    RigidBodyDesc,
+    ColliderSet, DefaultBodyHandle, DefaultBodySet, DefaultColliderHandle, DefaultColliderSet,
+    Ground, RigidBody, RigidBodyDesc,
 };
 use nphysics2d::world::{
     DefaultGeometricalWorld, DefaultMechanicalWorld, GeometricalWorld, MechanicalWorld,
 };
+use nphysics2d::{material, object};
 use std::convert::{TryFrom, TryInto};
 use std::fs::File;
 use std::io::BufReader;
@@ -54,13 +54,27 @@ fn main() {
 
 struct Player {
     body_handle: DefaultBodyHandle,
+    is_jumping: bool,
+    collider_handle: DefaultColliderHandle,
 }
 
 impl Player {
-    const X_POWER: N = 100.;
+    const X_POWER: N = 200.;
+    const Y_POWER: N = 200.;
     const SIZE: N = 10.;
 
     pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics) {
+        let rigid_body = physics.body_set.rigid_body_mut(self.body_handle).unwrap();
+        if !self.is_jumping && keyboard::is_key_pressed(ctx, KeyCode::Up) {
+            self.is_jumping = true;
+            rigid_body.apply_force(
+                0,
+                &Force2::linear(Vector2::new(0., -Player::Y_POWER)),
+                ForceType::VelocityChange,
+                true,
+            );
+        }
+
         let x_dir = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
             -1.
         } else if keyboard::is_key_pressed(ctx, KeyCode::Right) {
@@ -69,17 +83,28 @@ impl Player {
             0.
         };
 
-        let rigid_body = physics.body_set.rigid_body_mut(self.body_handle).unwrap();
-        rigid_body.set_linear_velocity(Vector2::new(
-            Player::X_POWER * x_dir,
-            rigid_body.velocity().linear[1],
-        ))
+        rigid_body.set_linear_velocity(Vector2::new(0., rigid_body.velocity().linear[1]));
+        rigid_body.apply_force(
+            0,
+            &Force2::linear(Vector2::new(Player::X_POWER * x_dir, 0.)),
+            ForceType::VelocityChange,
+            true,
+        );
+
+        // physics
+        //     .geometrical_world
+        //     .contacts_with(&physics.collider_set, self.collider_handle, true)
+        //     .map(|mut iter| {
+        //         iter.any(|(_, _, _, _, _, manifold)| {
+        //             println!("{:?}", manifold);
+        //             false
+        //         })
+        //     });
     }
 
     pub fn draw(&mut self, ctx: &mut Context, physics: &mut Physics) -> GameResult {
         let rigid_body = physics.body_set.rigid_body(self.body_handle).unwrap();
         let coords = rigid_body.position() * Point2::origin();
-        println!("{}", coords);
 
         let rect = graphics::Rect::new(coords.x, coords.y, Player::SIZE, Player::SIZE);
         let r1 =
@@ -93,15 +118,19 @@ impl Player {
         let body_handle = physics.body_set.insert(
             RigidBodyDesc::new()
                 .mass(10.)
-                .translation(Vector2::new(10., 10.))
+                .translation(Vector2::new(40., 10.))
                 .build(),
         );
 
-        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(10., 10.)));
+        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(4.99, 4.99)));
         let collider = ColliderDesc::new(shape).build(BodyPartHandle(body_handle, 0));
-        physics.collider_set.insert(collider);
+        let collider_handle = physics.collider_set.insert(collider);
 
-        Player { body_handle }
+        Player {
+            body_handle,
+            collider_handle,
+            is_jumping: false,
+        }
     }
 }
 
@@ -116,6 +145,8 @@ struct Physics {
 }
 
 impl Physics {
+    const GRAVITY: f32 = 200.;
+
     pub fn step(&mut self) {
         self.mechanical_world.step(
             &mut self.geometrical_world,
@@ -139,10 +170,16 @@ impl Tile {
     const SIZE: N = 10.;
 
     pub fn new(physics: &mut Physics, spritebatch: &mut SpriteBatch, coords: Point2<N>) -> Self {
-        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(Tile::SIZE, Tile::SIZE)));
+        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
+            Tile::SIZE / 2. - 0.01,
+            Tile::SIZE / 2. - 0.01,
+        )));
 
         let collider = ColliderDesc::new(shape)
-            .translation(Vector2::new(coords.x - 10., coords.y + 10.))
+            .material(material::MaterialHandle::new(material::BasicMaterial::new(
+                0., 0.,
+            )))
+            .translation(Vector2::new(coords.x, coords.y))
             .build(BodyPartHandle(physics.ground_handle, 0));
         physics.collider_set.insert(collider);
 
@@ -244,7 +281,7 @@ impl MyGame {
 
         let mut physics = {
             let geometrical_world = DefaultGeometricalWorld::new();
-            let gravity = Vector2::y() * 100.;
+            let gravity = Vector2::y() * Physics::GRAVITY;
             let mechanical_world = DefaultMechanicalWorld::new(gravity);
             let mut body_set = DefaultBodySet::new();
             let mut collider_set = DefaultColliderSet::new();
