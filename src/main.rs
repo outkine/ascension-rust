@@ -1,53 +1,56 @@
 extern crate nalgebra as na;
 
-use ggez::event::{self, EventHandler, KeyCode, KeyMods};
-use ggez::graphics::{Color, DrawParam, Rect};
+use ggez::event::{EventHandler, KeyCode};
+use ggez::graphics::spritebatch::SpriteBatch;
+use ggez::graphics::{DrawParam, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
-use ggez::graphics::spritebatch::SpriteBatch;
 use na::{Point2, Vector2};
-use ncollide2d::query::TrackedContact;
 use ncollide2d::shape::{Cuboid, ShapeHandle};
-use nphysics2d::algebra::{Force2, ForceType, Velocity2};
-use nphysics2d::force_generator::DefaultForceGeneratorSet;
-use nphysics2d::joint::DefaultJointConstraintSet;
-use nphysics2d::math::{Inertia, Velocity};
+use nphysics2d::algebra::{Force2, ForceType};
 use nphysics2d::object::{
-    Body, BodyHandle, BodyPart, BodyPartHandle, BodySet, BodyStatus, ColliderDesc, ColliderHandle,
-    ColliderSet, DefaultBodyHandle, DefaultBodySet, DefaultColliderHandle, DefaultColliderSet,
-    Ground, RigidBody, RigidBodyDesc,
+    Body, ColliderDesc, DefaultBodyHandle, DefaultColliderHandle, RigidBody, RigidBodyDesc,
 };
-use nphysics2d::world::{
-    DefaultGeometricalWorld, DefaultMechanicalWorld, GeometricalWorld, MechanicalWorld,
-};
-use nphysics2d::{material, object};
-use std::convert::{TryFrom, TryInto};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
-use tiled::parse;
+use nphysics2d::{material, object, world};
 
 type N = f32;
+
+const SPRITESHEET_WIDTH: f32 = 256.;
+const SPRITESHEET_HEIGHT: f32 = 256.;
+
+// for compatibility
+fn point2(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
+    ggez::nalgebra::Point2::new(point.x, point.y)
+}
+
+fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
+    let circle = graphics::Mesh::new_circle(
+        ctx,
+        graphics::DrawMode::Fill(graphics::FillOptions::DEFAULT),
+        point2(point),
+        1.,
+        0.,
+        color,
+    )
+    .unwrap();
+    graphics::draw(ctx, &circle, DrawParam::new());
+}
 
 fn main() {
     let resource_dir = std::path::PathBuf::from("./assets");
 
     // Make a Context.
-    let (mut ctx, mut event_loop) = ContextBuilder::new("Test", "Anton")
+    let (mut ctx, mut event_loop) = ContextBuilder::new("ascension-rust", "Anton")
         .add_resource_path(resource_dir)
-        .window_setup(ggez::conf::WindowSetup::default().title("Game!"))
+        .window_setup(ggez::conf::WindowSetup::default().title("Ascension"))
         .window_mode(ggez::conf::WindowMode::default().dimensions(300., 300.))
         .build()
-        .expect("Could not create ggez context!");
+        .expect("Could not create ggez context.");
 
-    // Create an instance of your event handler.
-    // Usually, you should provide it with the Context object to
-    // use when setting your game up.
     let mut my_game = MyGame::new(&mut ctx);
 
-    // Run!
-    match event::run(&mut ctx, &mut event_loop, &mut my_game) {
+    match ggez::event::run(&mut ctx, &mut event_loop, &mut my_game) {
         Ok(_) => println!("Exited cleanly."),
         Err(e) => println!("Error occured: {}", e),
     }
@@ -55,17 +58,39 @@ fn main() {
 
 struct Player {
     body_handle: DefaultBodyHandle,
-    on_ground: bool,
     collider_handle: DefaultColliderHandle,
+    on_ground: bool,
 }
 
 impl Player {
     const X_POWER: N = 100.;
     const Y_POWER: N = 100.;
     const SIZE: N = 10.;
+    const MASS: N = 10.;
+
+    pub fn new(physics: &mut Physics) -> Self {
+        let body_handle = physics.build_body(
+            RigidBodyDesc::new()
+                .mass(Self::MASS)
+                .translation(Vector2::new(40., 10.)),
+        );
+
+        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
+            Player::SIZE / 2. - 0.01,
+            Player::SIZE / 2. - 0.01,
+        )));
+
+        let collider_handle = physics.build_collider(ColliderDesc::new(shape), body_handle, true);
+
+        Player {
+            body_handle,
+            collider_handle,
+            on_ground: false,
+        }
+    }
 
     pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics) {
-        let rigid_body = physics.body_set.rigid_body_mut(self.body_handle).unwrap();
+        let rigid_body = physics.rigid_body_mut(self.body_handle);
         if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
             self.on_ground = false;
             rigid_body.apply_force(
@@ -76,49 +101,30 @@ impl Player {
             );
         }
 
-        let x_dir = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
+        let direction = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
             -1.
         } else if keyboard::is_key_pressed(ctx, KeyCode::Right) {
             1.
         } else {
             0.
         };
+        rigid_body.set_linear_velocity(Vector2::new(
+            direction * Self::X_POWER,
+            rigid_body.velocity().linear[1],
+        ));
 
-        rigid_body.set_linear_velocity(Vector2::new(0., rigid_body.velocity().linear[1]));
-        rigid_body.apply_force(
-            0,
-            &Force2::linear(Vector2::new(Player::X_POWER * x_dir, 0.)),
-            ForceType::VelocityChange,
-            true,
-        );
-
-        println!("NEW-----------------------");
-        self.on_ground = physics
-            .geometrical_world
-            .contacts_with(&physics.collider_set, self.collider_handle, true)
-            .map(|mut iter| {
-                iter.any(|(_, _, _, _, _, manifold)| {
-                    for contact in manifold.contacts() {
-                        MyGame::draw_point(ctx, contact.contact.world1, Color::new(0., 1., 0., 1.));
-                    }
-                    manifold.contacts().any(|contact| {
-                        println!(
-                            "{:?} {:?} {:?}",
-                            contact.contact.normal,
-                            contact.contact.world1,
-                            (rigid_body.position() * Point2::origin())
-                        );
-                        contact.contact.normal.y.round() > 0.
-                            && contact.contact.normal.x.round() == 0.
-                    })
-                })
+        self.on_ground = physics.collisions(self.collider_handle).any(|manifold| {
+            // for contact in manifold.contacts() {
+            //     MyGame::draw_point(ctx, contact.contact.world1, Color::new(0., 1., 0., 1.));
+            // }
+            manifold.contacts().any(|contact| {
+                contact.contact.normal.y.round() > 0. && contact.contact.normal.x.round() == 0.
             })
-            .get_or_insert(false)
-            .to_owned();
+        });
     }
 
     pub fn draw(&mut self, ctx: &mut Context, physics: &mut Physics) -> GameResult {
-        let rigid_body = physics.body_set.rigid_body(self.body_handle).unwrap();
+        let rigid_body = physics.rigid_body(self.body_handle);
         let coords = rigid_body.position() * Point2::origin();
 
         let rect = graphics::Rect::new(coords.x, coords.y, Player::SIZE, Player::SIZE);
@@ -127,44 +133,20 @@ impl Player {
         graphics::draw(
             ctx,
             &r1,
-            DrawParam::new().dest(ggez::nalgebra::Point2::new(-5., -5.)),
+            DrawParam::new().dest(point2(-Point2::new(Self::SIZE, Self::SIZE) / 2.)),
         )?;
 
         Ok(())
     }
-
-    pub fn init(physics: &mut Physics) -> Self {
-        let body_handle = physics.body_set.insert(
-            RigidBodyDesc::new()
-                .mass(10.)
-                .translation(Vector2::new(40., 10.))
-                .build(),
-        );
-
-        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(4.99, 4.99)));
-        let collider = ColliderDesc::new(shape)
-            .material(material::MaterialHandle::new(material::BasicMaterial::new(
-                0., 0.,
-            )))
-            .set_ccd_enabled(true)
-            .build(BodyPartHandle(body_handle, 0));
-        let collider_handle = physics.collider_set.insert(collider);
-
-        Player {
-            body_handle,
-            collider_handle,
-            on_ground: false,
-        }
-    }
 }
 
 struct Physics {
-    mechanical_world: DefaultMechanicalWorld<N>,
-    geometrical_world: DefaultGeometricalWorld<N>,
-    body_set: DefaultBodySet<N>,
-    collider_set: DefaultColliderSet<N>,
-    joint_constraint_set: DefaultJointConstraintSet<N>,
-    force_generator_set: DefaultForceGeneratorSet<N>,
+    mechanical_world: world::DefaultMechanicalWorld<N>,
+    geometrical_world: world::DefaultGeometricalWorld<N>,
+    body_set: object::DefaultBodySet<N>,
+    collider_set: object::DefaultColliderSet<N>,
+    joint_constraint_set: nphysics2d::joint::DefaultJointConstraintSet<N>,
+    force_generator_set: nphysics2d::force_generator::DefaultForceGeneratorSet<N>,
     ground_handle: DefaultBodyHandle,
 }
 
@@ -179,6 +161,45 @@ impl Physics {
             &mut self.joint_constraint_set,
             &mut self.force_generator_set,
         );
+    }
+
+    pub fn rigid_body(&self, handle: DefaultBodyHandle) -> &RigidBody<N> {
+        self.body_set.rigid_body(handle).unwrap()
+    }
+
+    pub fn rigid_body_mut(&mut self, handle: DefaultBodyHandle) -> &mut RigidBody<N> {
+        self.body_set.rigid_body_mut(handle).unwrap()
+    }
+
+    pub fn collisions(
+        &self,
+        handle: DefaultColliderHandle,
+    ) -> impl Iterator<Item = &ncollide2d::query::ContactManifold<N>> {
+        self.geometrical_world
+            .contacts_with(&self.collider_set, handle, true)
+            .into_iter()
+            .flatten()
+            .map(|(_, _, _, _, _, manifold)| manifold)
+    }
+
+    pub fn build_body(&mut self, body_desc: RigidBodyDesc<N>) -> DefaultBodyHandle {
+        let body = body_desc.build();
+        self.body_set.insert(body)
+    }
+
+    pub fn build_collider(
+        &mut self,
+        collider_desc: ColliderDesc<N>,
+        body_handle: DefaultBodyHandle,
+        ccd_enabled: bool,
+    ) -> DefaultColliderHandle {
+        let collider = collider_desc
+            .material(material::MaterialHandle::new(material::BasicMaterial::new(
+                0., 0.,
+            )))
+            .set_ccd_enabled(ccd_enabled)
+            .build(object::BodyPartHandle(body_handle, 0));
+        self.collider_set.insert(collider)
     }
 }
 
@@ -195,22 +216,24 @@ impl Tile {
 
     pub fn new(physics: &mut Physics, spritebatch: &mut SpriteBatch, coords: Point2<N>) -> Self {
         let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
-            Tile::SIZE / 2. - 0.01,
-            Tile::SIZE / 2. - 0.01,
+            Self::SIZE / 2. - 0.01,
+            Self::SIZE / 2. - 0.01,
         )));
 
-        let collider = ColliderDesc::new(shape)
-            .material(material::MaterialHandle::new(material::BasicMaterial::new(
-                0., 0.,
-            )))
-            .translation(Vector2::new(coords.x, coords.y))
-            .set_ccd_enabled(true)
-            .build(BodyPartHandle(physics.ground_handle, 0));
-        physics.collider_set.insert(collider);
+        physics.build_collider(
+            ColliderDesc::new(shape).translation(Vector2::new(coords.x, coords.y)),
+            physics.ground_handle,
+            false,
+        );
 
         let p = graphics::DrawParam::new()
-            .src(Rect::new(0., 0., 10. / 256., 10. / 256.))
-            .dest(ggez::nalgebra::Point2::new(coords.x, coords.y));
+            .src(Rect::new(
+                0.,
+                0.,
+                Self::SIZE / SPRITESHEET_WIDTH,
+                Self::SIZE / SPRITESHEET_HEIGHT,
+            ))
+            .dest(point2(coords));
         spritebatch.add(p);
 
         Tile {
@@ -226,6 +249,24 @@ struct Tilemap {
 }
 
 impl Tilemap {
+    pub fn new(tilemap: tiled::Map, level_size: (usize, usize)) -> Self {
+        let tiles = tilemap.layers[0]
+            .tiles
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<u32>>();
+        let tiles =
+            na::DMatrix::from_row_slice(tilemap.width as usize, tilemap.height as usize, &tiles)
+                .transpose();
+
+        Tilemap {
+            tilemap,
+            tiles,
+            level_size,
+        }
+    }
+
     pub fn level_slice(&self, level_num: usize) -> na::DMatrixSlice<u32> {
         self.tiles.slice(
             self.tiles.vector_to_matrix_index(level_num),
@@ -243,12 +284,9 @@ impl Tilemap {
         for (i, val) in level_slice.iter().enumerate() {
             if *val != 0 {
                 let (x, y) = level_slice.vector_to_matrix_index(i);
-                let (x, y) = (y as f32, x as f32);
-                Tile::new(
-                    physics,
-                    spritebatch,
-                    Point2::new(x * Tile::SIZE, y * Tile::SIZE),
-                );
+                let coords = Point2::new(x as f32, y as f32);
+
+                Tile::new(physics, spritebatch, coords * Tile::SIZE);
             }
         }
     }
@@ -262,22 +300,9 @@ struct MyGame {
 }
 
 impl MyGame {
-    pub fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
-        let circle = graphics::Mesh::new_circle(
-            ctx,
-            graphics::DrawMode::Fill(graphics::FillOptions::DEFAULT),
-            ggez::nalgebra::Point2::new(point.x, point.y),
-            1.,
-            0.,
-            color,
-        )
-        .unwrap();
-        graphics::draw(ctx, &circle, DrawParam::default());
-    }
-
     pub fn new(ctx: &mut Context) -> MyGame {
         let mut tilemap = {
-            let file = File::open(&Path::new("assets/tilemap.tmx")).unwrap();
+            let file = std::fs::File::open(&std::path::Path::new("assets/tilemap.tmx")).unwrap();
             let tilemap = tiled::parse(file).unwrap();
             let level_size = {
                 let level_size = &["level_width", "level_height"]
@@ -295,39 +320,23 @@ impl MyGame {
                 (level_size[0], level_size[1])
             };
 
-            let tiles = tilemap.layers[0]
-                .tiles
-                .iter()
-                .flatten()
-                .copied()
-                .collect::<Vec<u32>>();
-            let tiles = na::DMatrix::from_row_slice(
-                tilemap.width as usize,
-                tilemap.height as usize,
-                &tiles,
-            );
-
-            Tilemap {
-                tilemap,
-                tiles,
-                level_size,
-            }
+            Tilemap::new(tilemap, level_size)
         };
 
         let image = graphics::Image::new(ctx, "/sprite_sheet.png").unwrap();
         let mut spritebatch = graphics::spritebatch::SpriteBatch::new(image);
 
         let mut physics = {
-            let geometrical_world = DefaultGeometricalWorld::new();
+            let geometrical_world = world::DefaultGeometricalWorld::new();
             let gravity = Vector2::y() * Physics::GRAVITY;
-            let mechanical_world = DefaultMechanicalWorld::new(gravity);
-            let mut body_set = DefaultBodySet::new();
-            let mut collider_set = DefaultColliderSet::new();
+            let mechanical_world = world::DefaultMechanicalWorld::new(gravity);
+            let mut body_set = object::DefaultBodySet::new();
+            let collider_set = object::DefaultColliderSet::new();
 
-            let joint_constraint_set = DefaultJointConstraintSet::new();
-            let force_generator_set = DefaultForceGeneratorSet::new();
+            let joint_constraint_set = nphysics2d::joint::DefaultJointConstraintSet::new();
+            let force_generator_set = nphysics2d::force_generator::DefaultForceGeneratorSet::new();
 
-            let ground_handle = body_set.insert(Ground::new());
+            let ground_handle = body_set.insert(object::Ground::new());
 
             Physics {
                 geometrical_world,
@@ -342,7 +351,7 @@ impl MyGame {
 
         tilemap.init_level(0, &mut physics, &mut spritebatch);
 
-        let player = Player::init(&mut physics);
+        let player = Player::new(&mut physics);
 
         MyGame {
             player,
@@ -356,6 +365,7 @@ impl MyGame {
 impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         self.physics.step();
+        self.player.update(ctx, &mut self.physics);
         Ok(())
     }
 
@@ -364,10 +374,9 @@ impl EventHandler for MyGame {
         graphics::draw(
             ctx,
             &self.spritebatch,
-            graphics::DrawParam::new().dest(ggez::nalgebra::Point2::new(-5., -5.)),
+            DrawParam::new().dest(point2(-Point2::new(Tile::SIZE, Tile::SIZE) / 2.)),
         )?;
         self.player.draw(ctx, &mut self.physics)?;
-        self.player.update(ctx, &mut self.physics);
         graphics::present(ctx)
     }
 }
