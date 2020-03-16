@@ -37,25 +37,6 @@ fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
     graphics::draw(ctx, &circle, DrawParam::new());
 }
 
-fn main() {
-    let resource_dir = std::path::PathBuf::from("./assets");
-
-    // Make a Context.
-    let (mut ctx, mut event_loop) = ContextBuilder::new("ascension-rust", "Anton")
-        .add_resource_path(resource_dir)
-        .window_setup(ggez::conf::WindowSetup::default().title("Ascension"))
-        .window_mode(ggez::conf::WindowMode::default().dimensions(300., 300.))
-        .build()
-        .expect("Could not create ggez context.");
-
-    let mut my_game = MyGame::new(&mut ctx);
-
-    match ggez::event::run(&mut ctx, &mut event_loop, &mut my_game) {
-        Ok(_) => println!("Exited cleanly."),
-        Err(e) => println!("Error occured: {}", e),
-    }
-}
-
 struct Player {
     body_handle: DefaultBodyHandle,
     collider_handle: DefaultColliderHandle,
@@ -137,69 +118,6 @@ impl Player {
         )?;
 
         Ok(())
-    }
-}
-
-struct Physics {
-    mechanical_world: world::DefaultMechanicalWorld<N>,
-    geometrical_world: world::DefaultGeometricalWorld<N>,
-    body_set: object::DefaultBodySet<N>,
-    collider_set: object::DefaultColliderSet<N>,
-    joint_constraint_set: nphysics2d::joint::DefaultJointConstraintSet<N>,
-    force_generator_set: nphysics2d::force_generator::DefaultForceGeneratorSet<N>,
-    ground_handle: DefaultBodyHandle,
-}
-
-impl Physics {
-    const GRAVITY: f32 = 400.;
-
-    pub fn step(&mut self) {
-        self.mechanical_world.step(
-            &mut self.geometrical_world,
-            &mut self.body_set,
-            &mut self.collider_set,
-            &mut self.joint_constraint_set,
-            &mut self.force_generator_set,
-        );
-    }
-
-    pub fn rigid_body(&self, handle: DefaultBodyHandle) -> &RigidBody<N> {
-        self.body_set.rigid_body(handle).unwrap()
-    }
-
-    pub fn rigid_body_mut(&mut self, handle: DefaultBodyHandle) -> &mut RigidBody<N> {
-        self.body_set.rigid_body_mut(handle).unwrap()
-    }
-
-    pub fn collisions(
-        &self,
-        handle: DefaultColliderHandle,
-    ) -> impl Iterator<Item = &ncollide2d::query::ContactManifold<N>> {
-        self.geometrical_world
-            .contacts_with(&self.collider_set, handle, true)
-            .into_iter()
-            .flatten()
-            .map(|(_, _, _, _, _, manifold)| manifold)
-    }
-
-    pub fn build_body(&mut self, body_desc: RigidBodyDesc<N>) -> DefaultBodyHandle {
-        let body = body_desc.build();
-        self.body_set.insert(body)
-    }
-
-    pub fn build_collider(
-        &mut self,
-        collider_desc: ColliderDesc<N>,
-        body_handle: DefaultBodyHandle,
-        ccd_enabled: bool,
-    ) -> DefaultColliderHandle {
-        let collider = collider_desc
-            .material(material::MaterialHandle::new(material::BasicMaterial::new(
-                0., 0.,
-            )))
-            .set_ccd_enabled(ccd_enabled)
-            .build(object::BodyPartHandle(body_handle, 0));
-        self.collider_set.insert(collider)
     }
 }
 
@@ -292,6 +210,69 @@ impl Tilemap {
     }
 }
 
+struct Physics {
+    mechanical_world: world::DefaultMechanicalWorld<N>,
+    geometrical_world: world::DefaultGeometricalWorld<N>,
+    body_set: object::DefaultBodySet<N>,
+    collider_set: object::DefaultColliderSet<N>,
+    joint_constraint_set: nphysics2d::joint::DefaultJointConstraintSet<N>,
+    force_generator_set: nphysics2d::force_generator::DefaultForceGeneratorSet<N>,
+    ground_handle: DefaultBodyHandle,
+}
+
+impl Physics {
+    const GRAVITY: f32 = 400.;
+
+    pub fn step(&mut self) {
+        self.mechanical_world.step(
+            &mut self.geometrical_world,
+            &mut self.body_set,
+            &mut self.collider_set,
+            &mut self.joint_constraint_set,
+            &mut self.force_generator_set,
+        );
+    }
+
+    pub fn rigid_body(&self, handle: DefaultBodyHandle) -> &RigidBody<N> {
+        self.body_set.rigid_body(handle).unwrap()
+    }
+
+    pub fn rigid_body_mut(&mut self, handle: DefaultBodyHandle) -> &mut RigidBody<N> {
+        self.body_set.rigid_body_mut(handle).unwrap()
+    }
+
+    pub fn collisions(
+        &self,
+        handle: DefaultColliderHandle,
+    ) -> impl Iterator<Item = &ncollide2d::query::ContactManifold<N>> {
+        self.geometrical_world
+            .contacts_with(&self.collider_set, handle, true)
+            .into_iter()
+            .flatten()
+            .map(|(_, _, _, _, _, manifold)| manifold)
+    }
+
+    pub fn build_body(&mut self, body_desc: RigidBodyDesc<N>) -> DefaultBodyHandle {
+        let body = body_desc.build();
+        self.body_set.insert(body)
+    }
+
+    pub fn build_collider(
+        &mut self,
+        collider_desc: ColliderDesc<N>,
+        body_handle: DefaultBodyHandle,
+        ccd_enabled: bool,
+    ) -> DefaultColliderHandle {
+        let collider = collider_desc
+            .material(material::MaterialHandle::new(material::BasicMaterial::new(
+                0., 0.,
+            )))
+            .set_ccd_enabled(ccd_enabled)
+            .build(object::BodyPartHandle(body_handle, 0));
+        self.collider_set.insert(collider)
+    }
+}
+
 struct MyGame {
     player: Player,
     physics: Physics,
@@ -378,5 +359,24 @@ impl EventHandler for MyGame {
         )?;
         self.player.draw(ctx, &mut self.physics)?;
         graphics::present(ctx)
+    }
+}
+
+fn main() {
+    let resource_dir = std::path::PathBuf::from("./assets");
+
+    // Make a Context.
+    let (mut ctx, mut event_loop) = ContextBuilder::new("ascension-rust", "Anton")
+        .add_resource_path(resource_dir)
+        .window_setup(ggez::conf::WindowSetup::default().title("Ascension"))
+        .window_mode(ggez::conf::WindowMode::default().dimensions(300., 300.))
+        .build()
+        .expect("Could not create ggez context.");
+
+    let mut my_game = MyGame::new(&mut ctx);
+
+    match ggez::event::run(&mut ctx, &mut event_loop, &mut my_game) {
+        Ok(_) => println!("Exited cleanly."),
+        Err(e) => println!("Error occured: {}", e),
     }
 }
