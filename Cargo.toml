@@ -8,7 +8,4 @@ edition = "2018"
 
 [dependencies]
 ggez = "0.5"
-nalgebra = "0.20"
-ncollide2d = "0.22"
-nphysics2d = "0.14"
 tiled = "0.8"
