@@ -37,7 +37,7 @@ fn main() {
     let (mut ctx, mut event_loop) = ContextBuilder::new("Test", "Anton")
         .add_resource_path(resource_dir)
         .window_setup(ggez::conf::WindowSetup::default().title("Game!"))
-        .window_mode(ggez::conf::WindowMode::default().dimensions(100., 100.))
+        .window_mode(ggez::conf::WindowMode::default().dimensions(300., 300.))
         .build()
         .expect("Could not create ggez context!");
 
@@ -61,7 +61,7 @@ struct Player {
 
 impl Player {
     const X_POWER: N = 100.;
-    const Y_POWER: N = 200.;
+    const Y_POWER: N = 100.;
     const SIZE: N = 10.;
 
     pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics) {
@@ -92,18 +92,25 @@ impl Player {
             true,
         );
 
+        println!("NEW-----------------------");
         self.on_ground = physics
             .geometrical_world
             .contacts_with(&physics.collider_set, self.collider_handle, true)
             .map(|mut iter| {
                 iter.any(|(_, _, _, _, _, manifold)| {
-                    manifold
-                        .contacts()
-                        .any(|contact| contact.contact.normal.y > 0.)
-                    // for contact in manifold.contacts() {
-                    // MyGame::draw_point(ctx, contact.contact.world1, Color::new(0., 1., 0., 1.));
-                    // MyGame::draw_point(ctx, contact.contact.world2, Color::new(1., 0., 0., 1.));
-                    // }
+                    for contact in manifold.contacts() {
+                        MyGame::draw_point(ctx, contact.contact.world1, Color::new(0., 1., 0., 1.));
+                    }
+                    manifold.contacts().any(|contact| {
+                        println!(
+                            "{:?} {:?} {:?}",
+                            contact.contact.normal,
+                            contact.contact.world1,
+                            (rigid_body.position() * Point2::origin())
+                        );
+                        contact.contact.normal.y.round() > 0.
+                            && contact.contact.normal.x.round() == 0.
+                    })
                 })
             })
             .get_or_insert(false)
@@ -135,7 +142,12 @@ impl Player {
         );
 
         let shape = ShapeHandle::new(Cuboid::new(Vector2::new(4.99, 4.99)));
-        let collider = ColliderDesc::new(shape).build(BodyPartHandle(body_handle, 0));
+        let collider = ColliderDesc::new(shape)
+            .material(material::MaterialHandle::new(material::BasicMaterial::new(
+                0., 0.,
+            )))
+            .set_ccd_enabled(true)
+            .build(BodyPartHandle(body_handle, 0));
         let collider_handle = physics.collider_set.insert(collider);
 
         Player {
@@ -157,7 +169,7 @@ struct Physics {
 }
 
 impl Physics {
-    const GRAVITY: f32 = 200.;
+    const GRAVITY: f32 = 400.;
 
     pub fn step(&mut self) {
         self.mechanical_world.step(
@@ -192,6 +204,7 @@ impl Tile {
                 0., 0.,
             )))
             .translation(Vector2::new(coords.x, coords.y))
+            .set_ccd_enabled(true)
             .build(BodyPartHandle(physics.ground_handle, 0));
         physics.collider_set.insert(collider);
 
