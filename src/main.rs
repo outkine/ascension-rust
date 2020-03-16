@@ -1,12 +1,13 @@
 extern crate nalgebra as na;
 
 use ggez::event::{self, EventHandler, KeyCode, KeyMods};
-use ggez::graphics::{DrawParam, Rect};
+use ggez::graphics::{Color, DrawParam, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
 use ggez::graphics::spritebatch::SpriteBatch;
 use na::{Point2, Vector2};
+use ncollide2d::query::TrackedContact;
 use ncollide2d::shape::{Cuboid, ShapeHandle};
 use nphysics2d::algebra::{Force2, ForceType, Velocity2};
 use nphysics2d::force_generator::DefaultForceGeneratorSet;
@@ -54,19 +55,19 @@ fn main() {
 
 struct Player {
     body_handle: DefaultBodyHandle,
-    is_jumping: bool,
+    on_ground: bool,
     collider_handle: DefaultColliderHandle,
 }
 
 impl Player {
-    const X_POWER: N = 200.;
+    const X_POWER: N = 100.;
     const Y_POWER: N = 200.;
     const SIZE: N = 10.;
 
     pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics) {
         let rigid_body = physics.body_set.rigid_body_mut(self.body_handle).unwrap();
-        if !self.is_jumping && keyboard::is_key_pressed(ctx, KeyCode::Up) {
-            self.is_jumping = true;
+        if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
+            self.on_ground = false;
             rigid_body.apply_force(
                 0,
                 &Force2::linear(Vector2::new(0., -Player::Y_POWER)),
@@ -91,15 +92,22 @@ impl Player {
             true,
         );
 
-        // physics
-        //     .geometrical_world
-        //     .contacts_with(&physics.collider_set, self.collider_handle, true)
-        //     .map(|mut iter| {
-        //         iter.any(|(_, _, _, _, _, manifold)| {
-        //             println!("{:?}", manifold);
-        //             false
-        //         })
-        //     });
+        self.on_ground = physics
+            .geometrical_world
+            .contacts_with(&physics.collider_set, self.collider_handle, true)
+            .map(|mut iter| {
+                iter.any(|(_, _, _, _, _, manifold)| {
+                    manifold
+                        .contacts()
+                        .any(|contact| contact.contact.normal.y > 0.)
+                    // for contact in manifold.contacts() {
+                    // MyGame::draw_point(ctx, contact.contact.world1, Color::new(0., 1., 0., 1.));
+                    // MyGame::draw_point(ctx, contact.contact.world2, Color::new(1., 0., 0., 1.));
+                    // }
+                })
+            })
+            .get_or_insert(false)
+            .to_owned();
     }
 
     pub fn draw(&mut self, ctx: &mut Context, physics: &mut Physics) -> GameResult {
@@ -109,7 +117,11 @@ impl Player {
         let rect = graphics::Rect::new(coords.x, coords.y, Player::SIZE, Player::SIZE);
         let r1 =
             graphics::Mesh::new_rectangle(ctx, graphics::DrawMode::fill(), rect, graphics::BLACK)?;
-        graphics::draw(ctx, &r1, DrawParam::default())?;
+        graphics::draw(
+            ctx,
+            &r1,
+            DrawParam::new().dest(ggez::nalgebra::Point2::new(-5., -5.)),
+        )?;
 
         Ok(())
     }
@@ -129,7 +141,7 @@ impl Player {
         Player {
             body_handle,
             collider_handle,
-            is_jumping: false,
+            on_ground: false,
         }
     }
 }
@@ -237,6 +249,19 @@ struct MyGame {
 }
 
 impl MyGame {
+    pub fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
+        let circle = graphics::Mesh::new_circle(
+            ctx,
+            graphics::DrawMode::Fill(graphics::FillOptions::DEFAULT),
+            ggez::nalgebra::Point2::new(point.x, point.y),
+            1.,
+            0.,
+            color,
+        )
+        .unwrap();
+        graphics::draw(ctx, &circle, DrawParam::default());
+    }
+
     pub fn new(ctx: &mut Context) -> MyGame {
         let mut tilemap = {
             let file = File::open(&Path::new("assets/tilemap.tmx")).unwrap();
@@ -317,15 +342,19 @@ impl MyGame {
 
 impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
-        self.player.update(ctx, &mut self.physics);
         self.physics.step();
         Ok(())
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::WHITE);
-        graphics::draw(ctx, &self.spritebatch, graphics::DrawParam::new())?;
+        graphics::draw(
+            ctx,
+            &self.spritebatch,
+            graphics::DrawParam::new().dest(ggez::nalgebra::Point2::new(-5., -5.)),
+        )?;
         self.player.draw(ctx, &mut self.physics)?;
+        self.player.update(ctx, &mut self.physics);
         graphics::present(ctx)
     }
 }
