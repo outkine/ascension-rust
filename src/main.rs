@@ -15,8 +15,8 @@ use nphysics2d::{material, object, world};
 
 type N = f32;
 
-const SPRITESHEET_WIDTH: f32 = 250.;
-const SPRITESHEET_HEIGHT: f32 = 250.;
+const IMAGE_WIDTH: f32 = 250.;
+const IMAGE_HEIGHT: f32 = 250.;
 
 // for compatibility
 fn point2(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
@@ -40,6 +40,7 @@ fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
 }
 
 struct Player {
+    draw_param: DrawParam,
     body_handle: DefaultBodyHandle,
     collider_handle: DefaultColliderHandle,
     on_ground: bool,
@@ -52,6 +53,13 @@ impl Player {
     const MASS: N = 10.;
 
     pub fn new(physics: &mut Physics) -> Self {
+        let draw_param = DrawParam::new().src(Rect::new(
+            0.,
+            0.,
+            Self::SIZE / IMAGE_WIDTH,
+            Self::SIZE / IMAGE_HEIGHT,
+        ));
+
         let body_handle = physics.build_body(
             RigidBodyDesc::new()
                 .mass(Self::MASS)
@@ -66,6 +74,7 @@ impl Player {
         let collider_handle = physics.build_collider(ColliderDesc::new(shape), body_handle, true);
 
         Player {
+            draw_param,
             body_handle,
             collider_handle,
             on_ground: false,
@@ -106,14 +115,16 @@ impl Player {
         });
     }
 
-    pub fn draw(&mut self, ctx: &mut Context, physics: &mut Physics) -> GameResult {
+    pub fn draw(
+        &mut self,
+        ctx: &mut Context,
+        physics: &mut Physics,
+        spritesheet: &graphics::Image,
+    ) -> GameResult {
         let rigid_body = physics.rigid_body(self.body_handle);
         let coords = rigid_body.position() * Point2::origin();
 
-        let rect = graphics::Rect::new(coords.x, coords.y, Player::SIZE, Player::SIZE);
-        let r1 =
-            graphics::Mesh::new_rectangle(ctx, graphics::DrawMode::fill(), rect, graphics::BLACK)?;
-        graphics::draw(ctx, &r1, DrawParam::new())?;
+        graphics::draw(ctx, spritesheet, self.draw_param.dest(point2(coords)))?;
 
         Ok(())
     }
@@ -188,7 +199,7 @@ impl Tile {
             },
         }
 
-        let tile_spritesheet_width = (SPRITESHEET_WIDTH / Self::SIZE).floor();
+        let tile_spritesheet_width = (IMAGE_WIDTH / Self::SIZE).floor();
         let tile_id = tile.id as f32;
         let (src_x, src_y) = (
             tile_id % tile_spritesheet_width,
@@ -197,10 +208,10 @@ impl Tile {
 
         let draw_param = graphics::DrawParam::new()
             .src(Rect::new(
-                src_x * (Self::SIZE / SPRITESHEET_WIDTH),
-                src_y * (Self::SIZE / SPRITESHEET_HEIGHT),
-                Self::SIZE / SPRITESHEET_WIDTH,
-                Self::SIZE / SPRITESHEET_HEIGHT,
+                src_x * (Self::SIZE / IMAGE_WIDTH),
+                src_y * (Self::SIZE / IMAGE_HEIGHT),
+                Self::SIZE / IMAGE_WIDTH,
+                Self::SIZE / IMAGE_HEIGHT,
             ))
             .dest(point2(coords * Tile::SIZE));
 
@@ -331,7 +342,8 @@ struct MyGame {
     player: Player,
     physics: Physics,
     tilemap: Tilemap,
-    image: graphics::Image,
+    tilesheet_image: graphics::Image,
+    spritesheet_image: graphics::Image,
 }
 
 impl MyGame {
@@ -346,7 +358,7 @@ impl MyGame {
         graphics::set_default_filter(ctx, graphics::FilterMode::Nearest);
 
         let mut tilemap = {
-            let file = std::fs::File::open(&std::path::Path::new("assets/tilemap.tmx")).unwrap();
+            let file = ggez::filesystem::open(ctx, "/tilemap.tmx").unwrap();
             let tilemap = tiled::parse(file).unwrap();
             let level_size = {
                 let level_size = &["level_width", "level_height"]
@@ -368,7 +380,7 @@ impl MyGame {
         };
 
         let image_src = &tilemap.tilemap.tilesets[0].images[0].source;
-        let mut image =
+        let tilesheet_image =
             graphics::Image::new(ctx, std::path::Path::new("/").join(image_src)).unwrap();
 
         let mut physics = {
@@ -396,13 +408,15 @@ impl MyGame {
 
         tilemap.init_level(0, &mut physics);
 
+        let spritesheet_image = graphics::Image::new(ctx, "/spritesheet.png").unwrap();
         let player = Player::new(&mut physics);
 
         MyGame {
             player,
             tilemap,
             physics,
-            image,
+            tilesheet_image,
+            spritesheet_image,
         }
     }
 }
@@ -417,9 +431,10 @@ impl EventHandler for MyGame {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::WHITE);
         for tile in self.tilemap.level_tiles.iter() {
-            graphics::draw(ctx, &self.image, tile.draw_param)?;
+            graphics::draw(ctx, &self.tilesheet_image, tile.draw_param)?;
         }
-        self.player.draw(ctx, &mut self.physics)?;
+        self.player
+            .draw(ctx, &mut self.physics, &self.spritesheet_image)?;
         graphics::present(ctx)
     }
 }
