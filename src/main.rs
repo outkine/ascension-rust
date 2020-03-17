@@ -1,7 +1,6 @@
 extern crate nalgebra as na;
 
 use ggez::event::{EventHandler, KeyCode};
-use ggez::graphics::spritebatch::SpriteBatch;
 use ggez::graphics::{DrawParam, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
@@ -114,11 +113,7 @@ impl Player {
         let rect = graphics::Rect::new(coords.x, coords.y, Player::SIZE, Player::SIZE);
         let r1 =
             graphics::Mesh::new_rectangle(ctx, graphics::DrawMode::fill(), rect, graphics::BLACK)?;
-        graphics::draw(
-            ctx,
-            &r1,
-            DrawParam::new().dest(point2(-Point2::new(Self::SIZE, Self::SIZE) / 2.)),
-        )?;
+        graphics::draw(ctx, &r1, DrawParam::new())?;
 
         Ok(())
     }
@@ -154,45 +149,43 @@ impl Tile {
             _ => panic!("Unknown tile type."),
         };
 
-        match &tile.objectgroup {
-            Some(object_group) => {
-                let object = &object_group.objects[0];
-                match object.shape {
-                    tiled::ObjectShape::Rect { width, height } => {
-                        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
-                            width / 2. - 0.01,
-                            height / 2. - 0.01,
-                        )));
-                        let translation = Vector2::new(coords.x, coords.y) * Tile::SIZE
-                            + Vector2::new(object.x, object.y);
-                        match type_ {
-                            // If the type is a wall, then it's assigned to the ground object, and
-                            // we translate the collider. Otherwise, we translate the object.
-                            Wall => {
-                                physics.build_collider(
-                                    ColliderDesc::new(shape).translation(translation),
-                                    physics.ground_handle,
-                                    false,
-                                );
-                            }
-                            _ => {
-                                let body_handle = physics.build_body(
-                                    RigidBodyDesc::new()
-                                        .translation(translation)
-                                        .status(object::BodyStatus::Static),
-                                );
-                                physics.build_collider(
-                                    ColliderDesc::new(shape),
-                                    body_handle,
-                                    false,
-                                );
-                            }
-                        };
-                    }
-                    _ => (),
-                }
+        match type_ {
+            Wall => {
+                let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
+                    Self::SIZE / 2. - 0.01,
+                    Self::SIZE / 2. - 0.01,
+                )));
+                let translation = Vector2::new(coords.x, coords.y) * Tile::SIZE;
+                physics.build_collider(
+                    ColliderDesc::new(shape).translation(translation),
+                    physics.ground_handle,
+                    false,
+                );
             }
-            None => (),
+            _ => match &tile.objectgroup {
+                Some(object_group) => {
+                    let object = &object_group.objects[0];
+                    match object.shape {
+                        tiled::ObjectShape::Rect { width, height } => {
+                            let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
+                                width / 2. - 0.01,
+                                height / 2. - 0.01,
+                            )));
+                            let translation = Vector2::new(coords.x, coords.y) * Tile::SIZE
+                                + Vector2::new(object.x, object.y);
+
+                            let body_handle = physics.build_body(
+                                RigidBodyDesc::new()
+                                    .translation(translation)
+                                    .status(object::BodyStatus::Static),
+                            );
+                            physics.build_collider(ColliderDesc::new(shape), body_handle, false);
+                        }
+                        _ => (),
+                    }
+                }
+                None => (),
+            },
         }
 
         let tile_spritesheet_width = (SPRITESHEET_WIDTH / Self::SIZE).floor();
@@ -311,19 +304,6 @@ impl Physics {
             .into_iter()
             .flatten()
             .map(|(_, _, _, _, _, manifold)| manifold)
-    }
-
-    pub fn collisions_2(&self, handle: DefaultColliderHandle) {
-        self.geometrical_world
-            .contacts_with(&self.collider_set, handle, true)
-            .into_iter()
-            .flatten()
-            .map(|(_, coll1, _, coll2, _, manifold)| {
-                println!("{}", coll1.body() == self.ground_handle);
-                println!("{}", coll2.body() == self.ground_handle);
-                manifold
-            })
-            .collect::<Vec<&ncollide2d::query::ContactManifold<N>>>();
     }
 
     pub fn build_body(&mut self, body_desc: RigidBodyDesc<N>) -> DefaultBodyHandle {
