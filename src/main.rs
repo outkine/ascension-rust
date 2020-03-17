@@ -1,6 +1,7 @@
 extern crate nalgebra as na;
 
 use ggez::event::{EventHandler, KeyCode};
+use ggez::graphics::Color;
 use ggez::graphics::{DrawParam, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
@@ -17,6 +18,8 @@ type N = f32;
 
 const IMAGE_WIDTH: f32 = 250.;
 const IMAGE_HEIGHT: f32 = 250.;
+
+const BACKGROUND_COLOR: (u8, u8, u8) = (152, 152, 152);
 
 // for compatibility
 fn point2(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
@@ -429,7 +432,7 @@ impl EventHandler for MyGame {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        graphics::clear(ctx, graphics::WHITE);
+        graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         for tile in self.tilemap.level_tiles.iter() {
             graphics::draw(ctx, &self.tilesheet_image, tile.draw_param)?;
         }
