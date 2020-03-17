@@ -1,5 +1,8 @@
 extern crate nalgebra as na;
 
+use std::collections::HashMap;
+use std::default::Default;
+
 use ggez::event::{EventHandler, KeyCode};
 use ggez::graphics::Color;
 use ggez::graphics::{DrawParam, Rect};
@@ -27,6 +30,17 @@ fn point2(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
 }
 fn vector2(vector: Vector2<N>) -> ggez::nalgebra::Vector2<N> {
     ggez::nalgebra::Vector2::new(vector.x, vector.y)
+}
+
+fn pointN(point: Point2<usize>) -> Point2<N> {
+    Point2::new(point.x as N, point.y as N)
+}
+
+type Id = usize;
+fn get_id() -> Id {
+    use std::sync::atomic;
+    static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+    COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
 }
 
 fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
@@ -133,6 +147,7 @@ impl Player {
     }
 }
 
+#[derive(PartialEq)]
 enum TileType {
     Entrance,
     Exit,
@@ -141,35 +156,27 @@ enum TileType {
 }
 
 struct Tile {
-    type_: TileType,
+    type_: TileTypeId,
     draw_param: DrawParam,
+    coords: Point2<usize>,
 }
 
 impl Tile {
     const SIZE: N = 10.;
 
-    pub fn new(physics: &mut Physics, coords: Point2<N>, tile: &tiled::Tile) -> Self {
-        use TileType::*;
-        let type_ = match tile
-            .tile_type
-            .as_ref()
-            .unwrap_or(&String::default())
-            .as_str()
-        {
-            "Entrance" => Entrance,
-            "Exit" => Exit,
-            "Spikes" => Spikes,
-            "Wall" => Wall,
-            _ => panic!("Unknown tile type."),
-        };
-
-        match type_ {
-            Wall => {
+    pub fn new(
+        physics: &mut Physics,
+        coords: Point2<usize>,
+        tile: &tiled::Tile,
+        tile_type: &TileType,
+    ) -> Self {
+        match tile_type {
+            TileType::Wall => {
                 let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
                     Self::SIZE / 2. - 0.01,
                     Self::SIZE / 2. - 0.01,
                 )));
-                let translation = Vector2::new(coords.x, coords.y) * Tile::SIZE;
+                let translation = Vector2::new(coords.x as f32, coords.y as f32) * Tile::SIZE;
                 physics.build_collider(
                     ColliderDesc::new(shape).translation(translation),
                     physics.ground_handle,
@@ -185,7 +192,8 @@ impl Tile {
                                 width / 2. - 0.01,
                                 height / 2. - 0.01,
                             )));
-                            let translation = Vector2::new(coords.x, coords.y) * Tile::SIZE
+                            let translation = Vector2::new(coords.x as f32, coords.y as f32)
+                                * Tile::SIZE
                                 + Vector2::new(object.x, object.y);
 
                             let body_handle = physics.build_body(
@@ -216,17 +224,32 @@ impl Tile {
                 Self::SIZE / IMAGE_WIDTH,
                 Self::SIZE / IMAGE_HEIGHT,
             ))
-            .dest(point2(coords * Tile::SIZE));
+            .dest(point2(pointN(coords) * Tile::SIZE));
 
-        Tile { type_, draw_param }
+        Tile {
+            type_: tile.id,
+            draw_param,
+            coords: coords.clone(),
+        }
     }
 }
 
+type TileTypeId = u32;
+
 struct Tilemap {
     tilemap: tiled::Map,
-    tiles: na::DMatrix<u32>,
+    tiles: na::DMatrix<TileTypeId>,
+    tile_types: HashMap<TileTypeId, TileType>,
     level_size: (usize, usize),
-    level_tiles: Vec<Tile>,
+    current_level_info: LevelInfo,
+}
+
+#[derive(Default)]
+struct LevelInfo {
+    tiles: HashMap<Id, Tile>,
+    wallpaper: Vec<Point2<usize>>,
+    entrance: Id,
+    exit: Id,
 }
 
 impl Tilemap {
@@ -237,14 +260,37 @@ impl Tilemap {
             .flatten()
             .map(|layer_tile| layer_tile.gid)
             .collect::<Vec<u32>>();
+        let first_gid = tilemap.tilesets[0].first_gid;
         let tiles =
-            na::DMatrix::from_row_slice(tilemap.width as usize, tilemap.height as usize, &tiles);
+            na::DMatrix::from_row_slice(tilemap.width as usize, tilemap.height as usize, &tiles)
+                .map(|id| id - first_gid);
+        let tile_types = tilemap.tilesets[0]
+            .tiles
+            .iter()
+            .map(|tile| {
+                use TileType::*;
+                let tile_type = match tile
+                    .tile_type
+                    .as_ref()
+                    .unwrap_or(&String::default())
+                    .as_str()
+                {
+                    "Entrance" => Entrance,
+                    "Exit" => Exit,
+                    "Spikes" => Spikes,
+                    "Wall" => Wall,
+                    _ => panic!("Unknown tile type."),
+                };
+                (tile.id, tile_type)
+            })
+            .collect();
 
         Tilemap {
             tilemap,
             tiles,
+            tile_types,
             level_size,
-            level_tiles: Vec::new(),
+            current_level_info: LevelInfo::default(),
         }
     }
 
@@ -257,24 +303,62 @@ impl Tilemap {
 
     pub fn init_level(&mut self, level_num: usize, physics: &mut Physics) {
         let level_slice = self.level_slice(level_num);
-        let tiled::Tileset {
-            tiles, first_gid, ..
-        } = &self.tilemap.tilesets[0];
-        self.level_tiles = level_slice
+        let tileset = &self.tilemap.tilesets[0].tiles;
+        let tiles: HashMap<Id, Tile> = level_slice
             .iter()
             .enumerate()
             .filter_map(|(i, val)| {
-                match tiles.binary_search_by_key(val, |tile| tile.id + *first_gid) {
-                    Ok(tile_i) => Some({
-                        let (y, x) = level_slice.vector_to_matrix_index(i);
-                        let coords = Point2::new(x as f32, y as f32);
+                tileset.iter().find(|tile| tile.id == *val).map(|tile| {
+                    let (y, x) = level_slice.vector_to_matrix_index(i);
+                    let tile_type = &self.tile_types[&tile.id];
 
-                        Tile::new(physics, coords, &tiles[tile_i])
-                    }),
-                    Err(_) => None,
-                }
+                    (
+                        get_id(),
+                        Tile::new(physics, Point2::new(x, y), tile, tile_type),
+                    )
+                })
             })
             .collect();
+        let entrance = *tiles
+            .iter()
+            .find(|(k, v)| self.tile_types[&v.type_] == TileType::Entrance)
+            .expect("No entrance found.")
+            .0;
+        let exit = *tiles
+            .iter()
+            .find(|(k, v)| self.tile_types[&v.type_] == TileType::Exit)
+            .expect("No exit found.")
+            .0;
+        let mut wallpaper = Vec::new();
+        self.build_wallpaper(&mut wallpaper, &tiles[&entrance].coords);
+        self.current_level_info = LevelInfo {
+            tiles,
+            entrance,
+            exit,
+            wallpaper,
+        }
+    }
+
+    fn build_wallpaper(&self, wallpaper: &mut Vec<Point2<usize>>, coords: &Point2<usize>) {
+        for new_coords in &[
+            Point2::new(coords.x, coords.y + 1),
+            Point2::new(coords.x, coords.y.checked_sub(1).unwrap()),
+            Point2::new(coords.x + 1, coords.y),
+            Point2::new(coords.x.checked_sub(1).unwrap(), coords.y),
+        ] {
+            if !wallpaper.contains(new_coords)
+                && self
+                    .tile_type_at_coords(new_coords)
+                    .map_or(true, |tile_type| tile_type != &TileType::Wall)
+            {
+                wallpaper.push(new_coords.clone());
+                self.build_wallpaper(wallpaper, new_coords);
+            }
+        }
+    }
+
+    fn tile_type_at_coords(&self, coords: &Point2<usize>) -> Option<&TileType> {
+        self.tile_types.get(&self.tiles[(coords.y, coords.x)])
     }
 }
 
@@ -433,7 +517,21 @@ impl EventHandler for MyGame {
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
-        for tile in self.tilemap.level_tiles.iter() {
+        for coords in self.tilemap.current_level_info.wallpaper.iter() {
+            graphics::draw(
+                ctx,
+                &self.tilesheet_image,
+                DrawParam::new()
+                    .src(Rect::new(
+                        3. * (Tile::SIZE / IMAGE_WIDTH),
+                        0.,
+                        Tile::SIZE / IMAGE_WIDTH,
+                        Tile::SIZE / IMAGE_HEIGHT,
+                    ))
+                    .dest(point2(pointN(*coords) * Tile::SIZE)),
+            )?;
+        }
+        for tile in self.tilemap.current_level_info.tiles.values() {
             graphics::draw(ctx, &self.tilesheet_image, tile.draw_param)?;
         }
         self.player
