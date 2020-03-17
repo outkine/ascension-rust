@@ -16,12 +16,15 @@ use nphysics2d::{material, object, world};
 
 type N = f32;
 
-const SPRITESHEET_WIDTH: f32 = 256.;
-const SPRITESHEET_HEIGHT: f32 = 256.;
+const SPRITESHEET_WIDTH: f32 = 250.;
+const SPRITESHEET_HEIGHT: f32 = 250.;
 
 // for compatibility
 fn point2(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
     ggez::nalgebra::Point2::new(point.x, point.y)
+}
+fn vector2(vector: Vector2<N>) -> ggez::nalgebra::Vector2<N> {
+    ggez::nalgebra::Vector2::new(vector.x, vector.y)
 }
 
 fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
@@ -122,6 +125,9 @@ impl Player {
 }
 
 enum TileType {
+    Entrance,
+    Exit,
+    Spikes,
     Wall,
 }
 
@@ -132,31 +138,85 @@ struct Tile {
 impl Tile {
     const SIZE: N = 10.;
 
-    pub fn new(physics: &mut Physics, spritebatch: &mut SpriteBatch, coords: Point2<N>) -> Self {
-        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
-            Self::SIZE / 2. - 0.01,
-            Self::SIZE / 2. - 0.01,
-        )));
+    pub fn new(
+        physics: &mut Physics,
+        spritebatch: &mut SpriteBatch,
+        coords: Point2<N>,
+        tile: &tiled::Tile,
+    ) -> Self {
+        use TileType::*;
+        let type_ = match tile
+            .tile_type
+            .as_ref()
+            .unwrap_or(&String::default())
+            .as_str()
+        {
+            "Entrance" => Entrance,
+            "Exit" => Exit,
+            "Spikes" => Spikes,
+            "Wall" => Wall,
+            _ => panic!("Unknown tile type."),
+        };
 
-        physics.build_collider(
-            ColliderDesc::new(shape).translation(Vector2::new(coords.x, coords.y)),
-            physics.ground_handle,
-            false,
+        match &tile.objectgroup {
+            Some(object_group) => {
+                let object = &object_group.objects[0];
+                match object.shape {
+                    tiled::ObjectShape::Rect { width, height } => {
+                        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
+                            width / 2. - 0.01,
+                            height / 2. - 0.01,
+                        )));
+                        let translation = Vector2::new(coords.x, coords.y) * Tile::SIZE
+                            + Vector2::new(object.x, object.y);
+                        match type_ {
+                            // If the type is a wall, then it's assigned to the ground object, and
+                            // we translate the collider. Otherwise, we translate the object.
+                            Wall => {
+                                physics.build_collider(
+                                    ColliderDesc::new(shape).translation(translation),
+                                    physics.ground_handle,
+                                    false,
+                                );
+                            }
+                            _ => {
+                                let body_handle = physics.build_body(
+                                    RigidBodyDesc::new()
+                                        .translation(translation)
+                                        .status(object::BodyStatus::Static),
+                                );
+                                physics.build_collider(
+                                    ColliderDesc::new(shape),
+                                    body_handle,
+                                    false,
+                                );
+                            }
+                        };
+                    }
+                    _ => (),
+                }
+            }
+            None => (),
+        }
+
+        let tile_spritesheet_width = (SPRITESHEET_WIDTH / Self::SIZE).floor();
+        let tile_id = tile.id as f32;
+        let (src_x, src_y) = (
+            tile_id % tile_spritesheet_width,
+            (tile_id / tile_spritesheet_width).floor(),
         );
 
         let p = graphics::DrawParam::new()
             .src(Rect::new(
-                0.,
-                0.,
+                src_x * (Self::SIZE / SPRITESHEET_WIDTH),
+                src_y * (Self::SIZE / SPRITESHEET_HEIGHT),
                 Self::SIZE / SPRITESHEET_WIDTH,
                 Self::SIZE / SPRITESHEET_HEIGHT,
             ))
-            .dest(point2(coords));
+            .dest(point2(coords * Tile::SIZE));
         spritebatch.add(p);
 
-        Tile {
-            type_: TileType::Wall,
-        }
+        Tile { type_ }
     }
 }
 
@@ -172,11 +232,10 @@ impl Tilemap {
             .tiles
             .iter()
             .flatten()
-            .copied()
+            .map(|layer_tile| layer_tile.gid)
             .collect::<Vec<u32>>();
         let tiles =
-            na::DMatrix::from_row_slice(tilemap.width as usize, tilemap.height as usize, &tiles)
-                .transpose();
+            na::DMatrix::from_row_slice(tilemap.width as usize, tilemap.height as usize, &tiles);
 
         Tilemap {
             tilemap,
@@ -199,12 +258,18 @@ impl Tilemap {
         spritebatch: &mut SpriteBatch,
     ) {
         let level_slice = self.level_slice(level_num);
+        let tiled::Tileset {
+            tiles, first_gid, ..
+        } = &self.tilemap.tilesets[0];
         for (i, val) in level_slice.iter().enumerate() {
-            if *val != 0 {
-                let (x, y) = level_slice.vector_to_matrix_index(i);
-                let coords = Point2::new(x as f32, y as f32);
+            match tiles.binary_search_by_key(val, |tile| tile.id + *first_gid) {
+                Ok(tile_i) => {
+                    let (y, x) = level_slice.vector_to_matrix_index(i);
+                    let coords = Point2::new(x as f32, y as f32);
 
-                Tile::new(physics, spritebatch, coords * Tile::SIZE);
+                    Tile::new(physics, spritebatch, coords, &tiles[tile_i]);
+                }
+                Err(_) => (),
             }
         }
     }
@@ -250,6 +315,19 @@ impl Physics {
             .into_iter()
             .flatten()
             .map(|(_, _, _, _, _, manifold)| manifold)
+    }
+
+    pub fn collisions_2(&self, handle: DefaultColliderHandle) {
+        self.geometrical_world
+            .contacts_with(&self.collider_set, handle, true)
+            .into_iter()
+            .flatten()
+            .map(|(_, coll1, _, coll2, _, manifold)| {
+                println!("{}", coll1.body() == self.ground_handle);
+                println!("{}", coll2.body() == self.ground_handle);
+                manifold
+            })
+            .collect::<Vec<&ncollide2d::query::ContactManifold<N>>>();
     }
 
     pub fn build_body(&mut self, body_desc: RigidBodyDesc<N>) -> DefaultBodyHandle {
@@ -304,8 +382,10 @@ impl MyGame {
             Tilemap::new(tilemap, level_size)
         };
 
-        let image = graphics::Image::new(ctx, "/sprite_sheet.png").unwrap();
+        let image_src = &tilemap.tilemap.tilesets[0].images[0].source;
+        let image = graphics::Image::new(ctx, std::path::Path::new("/").join(image_src)).unwrap();
         let mut spritebatch = graphics::spritebatch::SpriteBatch::new(image);
+        spritebatch.set_filter(graphics::FilterMode::Nearest);
 
         let mut physics = {
             let geometrical_world = world::DefaultGeometricalWorld::new();
@@ -333,6 +413,13 @@ impl MyGame {
         tilemap.init_level(0, &mut physics, &mut spritebatch);
 
         let player = Player::new(&mut physics);
+
+        graphics::set_transform(
+            ctx,
+            DrawParam::new()
+                .scale(vector2(Vector2::new(2., 2.)))
+                .to_matrix(),
+        );
 
         MyGame {
             player,
@@ -368,7 +455,11 @@ fn main() {
     // Make a Context.
     let (mut ctx, mut event_loop) = ContextBuilder::new("ascension-rust", "Anton")
         .add_resource_path(resource_dir)
-        .window_setup(ggez::conf::WindowSetup::default().title("Ascension"))
+        .window_setup(
+            ggez::conf::WindowSetup::default()
+                .title("Ascension")
+                .samples(ggez::conf::NumSamples::Zero),
+        )
         .window_mode(ggez::conf::WindowMode::default().dimensions(300., 300.))
         .build()
         .expect("Could not create ggez context.");
