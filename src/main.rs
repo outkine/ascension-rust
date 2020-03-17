@@ -360,6 +360,15 @@ struct MyGame {
 
 impl MyGame {
     pub fn new(ctx: &mut Context) -> MyGame {
+        graphics::set_default_filter(ctx, graphics::FilterMode::Nearest);
+        graphics::set_transform(
+            ctx,
+            DrawParam::new()
+                .scale(vector2(Vector2::new(2., 2.)))
+                .to_matrix(),
+        );
+        graphics::apply_transformations(ctx);
+
         let mut tilemap = {
             let file = std::fs::File::open(&std::path::Path::new("assets/tilemap.tmx")).unwrap();
             let tilemap = tiled::parse(file).unwrap();
@@ -384,8 +393,8 @@ impl MyGame {
 
         let image_src = &tilemap.tilemap.tilesets[0].images[0].source;
         let image = graphics::Image::new(ctx, std::path::Path::new("/").join(image_src)).unwrap();
+
         let mut spritebatch = graphics::spritebatch::SpriteBatch::new(image);
-        spritebatch.set_filter(graphics::FilterMode::Nearest);
 
         let mut physics = {
             let geometrical_world = world::DefaultGeometricalWorld::new();
@@ -413,13 +422,6 @@ impl MyGame {
         tilemap.init_level(0, &mut physics, &mut spritebatch);
 
         let player = Player::new(&mut physics);
-
-        graphics::set_transform(
-            ctx,
-            DrawParam::new()
-                .scale(vector2(Vector2::new(2., 2.)))
-                .to_matrix(),
-        );
 
         MyGame {
             player,
