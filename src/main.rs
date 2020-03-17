@@ -133,17 +133,13 @@ enum TileType {
 
 struct Tile {
     type_: TileType,
+    draw_param: DrawParam,
 }
 
 impl Tile {
     const SIZE: N = 10.;
 
-    pub fn new(
-        physics: &mut Physics,
-        spritebatch: &mut SpriteBatch,
-        coords: Point2<N>,
-        tile: &tiled::Tile,
-    ) -> Self {
+    pub fn new(physics: &mut Physics, coords: Point2<N>, tile: &tiled::Tile) -> Self {
         use TileType::*;
         let type_ = match tile
             .tile_type
@@ -206,7 +202,7 @@ impl Tile {
             (tile_id / tile_spritesheet_width).floor(),
         );
 
-        let p = graphics::DrawParam::new()
+        let draw_param = graphics::DrawParam::new()
             .src(Rect::new(
                 src_x * (Self::SIZE / SPRITESHEET_WIDTH),
                 src_y * (Self::SIZE / SPRITESHEET_HEIGHT),
@@ -214,9 +210,8 @@ impl Tile {
                 Self::SIZE / SPRITESHEET_HEIGHT,
             ))
             .dest(point2(coords * Tile::SIZE));
-        spritebatch.add(p);
 
-        Tile { type_ }
+        Tile { type_, draw_param }
     }
 }
 
@@ -224,6 +219,7 @@ struct Tilemap {
     tilemap: tiled::Map,
     tiles: na::DMatrix<u32>,
     level_size: (usize, usize),
+    level_tiles: Vec<Tile>,
 }
 
 impl Tilemap {
@@ -241,6 +237,7 @@ impl Tilemap {
             tilemap,
             tiles,
             level_size,
+            level_tiles: Vec::new(),
         }
     }
 
@@ -251,27 +248,26 @@ impl Tilemap {
         )
     }
 
-    pub fn init_level(
-        &mut self,
-        level_num: usize,
-        physics: &mut Physics,
-        spritebatch: &mut SpriteBatch,
-    ) {
+    pub fn init_level(&mut self, level_num: usize, physics: &mut Physics) {
         let level_slice = self.level_slice(level_num);
         let tiled::Tileset {
             tiles, first_gid, ..
         } = &self.tilemap.tilesets[0];
-        for (i, val) in level_slice.iter().enumerate() {
-            match tiles.binary_search_by_key(val, |tile| tile.id + *first_gid) {
-                Ok(tile_i) => {
-                    let (y, x) = level_slice.vector_to_matrix_index(i);
-                    let coords = Point2::new(x as f32, y as f32);
+        self.level_tiles = level_slice
+            .iter()
+            .enumerate()
+            .filter_map(|(i, val)| {
+                match tiles.binary_search_by_key(val, |tile| tile.id + *first_gid) {
+                    Ok(tile_i) => Some({
+                        let (y, x) = level_slice.vector_to_matrix_index(i);
+                        let coords = Point2::new(x as f32, y as f32);
 
-                    Tile::new(physics, spritebatch, coords, &tiles[tile_i]);
+                        Tile::new(physics, coords, &tiles[tile_i])
+                    }),
+                    Err(_) => None,
                 }
-                Err(_) => (),
-            }
-        }
+            })
+            .collect();
     }
 }
 
@@ -355,11 +351,20 @@ struct MyGame {
     player: Player,
     physics: Physics,
     tilemap: Tilemap,
-    spritebatch: graphics::spritebatch::SpriteBatch,
+    image: graphics::Image,
 }
 
 impl MyGame {
     pub fn new(ctx: &mut Context) -> MyGame {
+        graphics::set_transform(
+            ctx,
+            DrawParam::new()
+                .scale(vector2(Vector2::new(2., 2.)))
+                .to_matrix(),
+        );
+        graphics::apply_transformations(ctx);
+        graphics::set_default_filter(ctx, graphics::FilterMode::Nearest);
+
         let mut tilemap = {
             let file = std::fs::File::open(&std::path::Path::new("assets/tilemap.tmx")).unwrap();
             let tilemap = tiled::parse(file).unwrap();
@@ -383,9 +388,8 @@ impl MyGame {
         };
 
         let image_src = &tilemap.tilemap.tilesets[0].images[0].source;
-        let image = graphics::Image::new(ctx, std::path::Path::new("/").join(image_src)).unwrap();
-        let mut spritebatch = graphics::spritebatch::SpriteBatch::new(image);
-        spritebatch.set_filter(graphics::FilterMode::Nearest);
+        let mut image =
+            graphics::Image::new(ctx, std::path::Path::new("/").join(image_src)).unwrap();
 
         let mut physics = {
             let geometrical_world = world::DefaultGeometricalWorld::new();
@@ -410,22 +414,15 @@ impl MyGame {
             }
         };
 
-        tilemap.init_level(0, &mut physics, &mut spritebatch);
+        tilemap.init_level(0, &mut physics);
 
         let player = Player::new(&mut physics);
-
-        graphics::set_transform(
-            ctx,
-            DrawParam::new()
-                .scale(vector2(Vector2::new(2., 2.)))
-                .to_matrix(),
-        );
 
         MyGame {
             player,
             tilemap,
             physics,
-            spritebatch,
+            image,
         }
     }
 }
@@ -439,11 +436,9 @@ impl EventHandler for MyGame {
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::WHITE);
-        graphics::draw(
-            ctx,
-            &self.spritebatch,
-            DrawParam::new().dest(point2(-Point2::new(Tile::SIZE, Tile::SIZE) / 2.)),
-        )?;
+        for tile in self.tilemap.level_tiles.iter() {
+            graphics::draw(ctx, &self.image, tile.draw_param)?;
+        }
         self.player.draw(ctx, &mut self.physics)?;
         graphics::present(ctx)
     }
