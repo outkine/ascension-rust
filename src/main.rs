@@ -9,11 +9,12 @@ use ggez::graphics::{DrawParam, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
-use na::{Point2, Vector2};
+use na::{Isometry2, Point2, Vector2};
 use ncollide2d::shape::{Cuboid, ShapeHandle};
 use nphysics2d::algebra::{Force2, ForceType};
 use nphysics2d::object::{
-    Body, ColliderDesc, DefaultBodyHandle, DefaultColliderHandle, RigidBody, RigidBodyDesc,
+    Body, ColliderDesc, ColliderHandle, DefaultBodyHandle, DefaultColliderHandle, RigidBody,
+    RigidBodyDesc,
 };
 use nphysics2d::{material, object, world};
 use tiled::PropertyValue;
@@ -26,11 +27,18 @@ const IMAGE_HEIGHT: f32 = 250.;
 const BACKGROUND_COLOR: (u8, u8, u8) = (152, 152, 152);
 
 // for compatibility
-fn point2(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
+fn point_to_old(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
     ggez::nalgebra::Point2::new(point.x, point.y)
 }
-fn vector2(vector: Vector2<N>) -> ggez::nalgebra::Vector2<N> {
+fn vector_to_old(vector: Vector2<N>) -> ggez::nalgebra::Vector2<N> {
     ggez::nalgebra::Vector2::new(vector.x, vector.y)
+}
+
+fn isometry_to_point(isometry: Isometry2<N>) -> Point2<N> {
+    isometry.translation.vector.into()
+}
+fn point_to_isometry(point: Point2<N>) -> Isometry2<N> {
+    Isometry2::translation(point.x, point.y)
 }
 
 fn fpoint(point: Point2<usize>) -> Point2<N> {
@@ -48,7 +56,7 @@ fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
     let circle = graphics::Mesh::new_circle(
         ctx,
         graphics::DrawMode::Fill(graphics::FillOptions::DEFAULT),
-        point2(point),
+        point_to_old(point),
         1.,
         0.,
         color,
@@ -66,7 +74,7 @@ struct Player {
 
 impl Player {
     const X_POWER: N = 100.;
-    const Y_POWER: N = 100.;
+    const Y_POWER: N = 200.;
     const SIZE: N = 10.;
     const MASS: N = 10.;
 
@@ -95,7 +103,7 @@ impl Player {
             draw_param,
             body_handle,
             collider_handle,
-            on_ground: false,
+            on_ground: true,
         }
     }
 
@@ -122,15 +130,6 @@ impl Player {
             direction * Self::X_POWER,
             rigid_body.velocity().linear[1],
         ));
-
-        self.on_ground = physics.collisions(self.collider_handle).any(|manifold| {
-            // for contact in manifold.contacts() {
-            //     MyGame::draw_point(ctx, contact.contact.world1, Color::new(0., 1., 0., 1.));
-            // }
-            manifold.contacts().any(|contact| {
-                contact.contact.normal.y.round() > 0. && contact.contact.normal.x.round() == 0.
-            })
-        });
     }
 
     pub fn draw(
@@ -140,11 +139,23 @@ impl Player {
         spritesheet: &graphics::Image,
     ) -> GameResult {
         let rigid_body = physics.rigid_body(self.body_handle);
-        let coords = rigid_body.position() * Point2::origin();
+        let coords = isometry_to_point(*rigid_body.position());
 
-        graphics::draw(ctx, spritesheet, self.draw_param.dest(point2(coords)))?;
+        graphics::draw(ctx, spritesheet, self.draw_param.dest(point_to_old(coords)))?;
 
         Ok(())
+    }
+
+    pub fn init(&mut self, physics: &mut Physics, entrance: &Point2<usize>) {
+        physics
+            .rigid_body_mut(self.body_handle)
+            .set_position(point_to_isometry(
+                fpoint(entrance.clone()) * TileInstance::SIZE,
+            ))
+    }
+
+    pub fn die(&mut self, physics: &mut Physics, entrance: &Point2<usize>) {
+        self.init(physics, entrance);
     }
 }
 
@@ -228,7 +239,9 @@ impl TileInstance {
                         .status(object::BodyStatus::Static),
                 );
                 physics.build_collider(
-                    ColliderDesc::new(shape).sensor(!is_solid),
+                    ColliderDesc::new(shape)
+                        .sensor(!is_solid)
+                        .user_data(tile.info.id),
                     body_handle,
                     false,
                 );
@@ -248,7 +261,7 @@ impl TileInstance {
                 Self::SIZE / IMAGE_WIDTH,
                 Self::SIZE / IMAGE_HEIGHT,
             ))
-            .dest(point2(fcoords * TileInstance::SIZE));
+            .dest(point_to_old(fcoords * TileInstance::SIZE));
 
         TileInstance {
             tile: tile.info.id,
@@ -273,6 +286,16 @@ struct Level {
     wallpaper: Vec<Point2<usize>>,
     entrance: TileInstanceId,
     exit: TileInstanceId,
+}
+
+impl Level {
+    pub fn tile_from_id(&self, id: &TileInstanceId) -> &TileInstance {
+        &self.tiles[id]
+    }
+
+    pub fn entrance(&self) -> &TileInstance {
+        self.tile_from_id(&self.entrance)
+    }
 }
 
 impl Tilemap {
@@ -300,9 +323,10 @@ impl Tilemap {
             .map(|layer_tile| layer_tile.gid)
             .collect::<Vec<TileId>>();
         let first_gid = tilemap.tilesets[0].first_gid;
+        // TODO better solution for 0 tile
         let tilematrix =
             na::DMatrix::from_row_slice(tilemap.width as usize, tilemap.height as usize, &tilevec)
-                .map(|id| id - first_gid);
+                .map(|id| id.checked_sub(first_gid).unwrap_or(Id::max_value()));
         let tile_types = tilemap
             .tilesets
             .remove(0)
@@ -403,6 +427,20 @@ impl Tilemap {
     fn tile_at_coords(&self, coords: &Point2<usize>) -> Option<&Tile> {
         self.tiles.get(&self.tilematrix[(coords.y, coords.x)])
     }
+
+    fn tile_from_collider(&self, collider: &object::Collider<N, DefaultBodyHandle>) -> &Tile {
+        self.tile_from_id(
+            collider
+                .user_data()
+                .expect("Tile has no user_data.")
+                .downcast_ref::<u32>()
+                .unwrap(),
+        )
+    }
+
+    fn tile_from_id(&self, id: &TileId) -> &Tile {
+        &self.tiles[id]
+    }
 }
 
 struct Physics {
@@ -447,6 +485,48 @@ impl Physics {
             .map(|(_, _, _, _, _, manifold)| manifold)
     }
 
+    pub fn collision_events(
+        &self,
+    ) -> Vec<(
+        &DefaultColliderHandle,
+        &DefaultColliderHandle,
+        &ncollide2d::query::ContactManifold<N>,
+    )> {
+        self.geometrical_world
+            .contact_events()
+            .iter()
+            .filter_map(|event| match event {
+                ncollide2d::pipeline::narrow_phase::ContactEvent::Started(handle1, handle2) => self
+                    .geometrical_world
+                    .contact_pair(&self.collider_set, *handle1, *handle2, true)
+                    .map(|(_, _, _, _, _, manifold)| (handle1, handle2, manifold)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .clone()
+    }
+
+    pub fn proximity_events(
+        &self,
+    ) -> Vec<(
+        DefaultColliderHandle,
+        DefaultColliderHandle,
+        ncollide2d::query::Proximity,
+    )> {
+        self.geometrical_world
+            .proximity_events()
+            .iter()
+            .map(|proximity_event| {
+                (
+                    proximity_event.collider1,
+                    proximity_event.collider2,
+                    proximity_event.new_status,
+                )
+            })
+            .collect::<Vec<_>>()
+            .clone()
+    }
+
     pub fn build_body(&mut self, body_desc: RigidBodyDesc<N>) -> DefaultBodyHandle {
         let body = body_desc.build();
         self.body_set.insert(body)
@@ -481,7 +561,7 @@ impl MyGame {
         graphics::set_transform(
             ctx,
             DrawParam::new()
-                .scale(vector2(Vector2::new(2., 2.)))
+                .scale(vector_to_old(Vector2::new(2., 2.)))
                 .to_matrix(),
         );
         graphics::apply_transformations(ctx);
@@ -518,9 +598,11 @@ impl MyGame {
 
         let tilesheet_image = graphics::Image::new(ctx, "/tilesheet.png").unwrap();
         let spritesheet_image = graphics::Image::new(ctx, "/spritesheet.png").unwrap();
-        let player = Player::new(&mut physics);
 
         tilemap.init_level(0, &mut physics);
+
+        let mut player = Player::new(&mut physics);
+        player.init(&mut physics, &tilemap.current_level.entrance().coords);
 
         MyGame {
             player,
@@ -535,6 +617,31 @@ impl MyGame {
 impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         self.physics.step();
+
+        for (coll1_handle, _coll2_handle, manifold) in self.physics.collision_events() {
+            if *coll1_handle == self.player.collider_handle
+                && manifold.contacts().any(|contact| {
+                    contact.contact.normal.y.round() > 0. && contact.contact.normal.x.round() == 0.
+                })
+            {
+                self.player.on_ground = true;
+            }
+        }
+
+        for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
+            if coll1_handle == self.player.collider_handle {
+                let collider = self.physics.collider_set.get(coll2_handle).unwrap();
+                let collided_tile = self.tilemap.tile_from_collider(collider);
+                match collided_tile.type_ {
+                    TileType::Spikes => self.player.die(
+                        &mut self.physics,
+                        &self.tilemap.current_level.entrance().coords,
+                    ),
+                    _ => (),
+                }
+            }
+        }
+
         self.player.update(ctx, &mut self.physics);
         Ok(())
     }
@@ -552,7 +659,7 @@ impl EventHandler for MyGame {
                         TileInstance::SIZE / IMAGE_WIDTH,
                         TileInstance::SIZE / IMAGE_HEIGHT,
                     ))
-                    .dest(point2(fpoint(coords.clone()) * TileInstance::SIZE)),
+                    .dest(point_to_old(fpoint(coords.clone()) * TileInstance::SIZE)),
             )?;
         }
         for tile in self.tilemap.current_level.tiles.values() {
