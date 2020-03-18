@@ -193,8 +193,9 @@ impl TileInstance {
                             width / 2. - 0.01,
                             height / 2. - 0.01,
                         )));
+                        // TODO figure out a better fix than (object.x, object.y) / 2.
                         let translation =
-                            vector * TileInstance::SIZE + Vector2::new(object.x, object.y);
+                            vector * TileInstance::SIZE + Vector2::new(object.x, object.y) / 2.;
 
                         (shape, translation)
                     }
