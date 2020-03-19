@@ -17,6 +17,7 @@ use nphysics2d::object::{
     RigidBodyDesc,
 };
 use nphysics2d::{material, object, world};
+use std::f32::consts::PI;
 use tiled::PropertyValue;
 
 type N = f32;
@@ -189,7 +190,7 @@ struct TileInstance {
 }
 
 impl TileInstance {
-    pub fn new(physics: &mut Physics, coords: Point2<TileN>, tile: &Tile) -> Self {
+    pub fn new(physics: &mut Physics, coords: Point2<TileN>, tile: &Tile, tile_id: TileId) -> Self {
         let real_point = Tile::point_to_real(coords);
         let vector = point_to_vector(real_point.clone());
 
@@ -258,6 +259,15 @@ impl TileInstance {
             (tile.info.id / tile_spritesheet_width),
         );
 
+        let direction = id_to_direction(tile_id);
+        let rotation = direction_to_rotation(&direction);
+        let offset = match &direction {
+            Direction::North => Point2::new(0., 0.),
+            Direction::South => Point2::new(Tile::SIZE, Tile::SIZE),
+            Direction::East => Point2::new(Tile::SIZE, 0.),
+            Direction::West => Point2::new(0., Tile::SIZE),
+        };
+
         let draw_param = graphics::DrawParam::new()
             .src(Rect::new(
                 src_x as N * (Tile::SIZE / IMAGE_WIDTH),
@@ -265,7 +275,8 @@ impl TileInstance {
                 Tile::SIZE / IMAGE_WIDTH,
                 Tile::SIZE / IMAGE_HEIGHT,
             ))
-            .dest(point_to_old(real_point));
+            .rotation(rotation)
+            .dest(point_to_old((real_point.coords + offset.coords).into()));
 
         TileInstance {
             draw_param,
@@ -277,6 +288,7 @@ impl TileInstance {
 type TileInstanceId = Id;
 struct Level {
     tiles: HashMap<TileInstanceId, TileInstance>,
+    guns: Vec<TileInstanceId>,
 }
 
 impl Level {
@@ -289,7 +301,7 @@ impl Level {
             .iter()
             .enumerate()
             .filter_map(|(i, tile_id)| {
-                let tile = &tiles[tile_id];
+                let tile = Tilemap::get_tile_from_id(tiles, *tile_id);
                 if tile.type_ != TileType::None {
                     Some((
                         get_id(),
@@ -297,6 +309,7 @@ impl Level {
                             physics,
                             tuple_to_point(tilematrix.vector_to_matrix_index(i)),
                             tile,
+                            *tile_id,
                         ),
                     ))
                 } else {
@@ -307,12 +320,14 @@ impl Level {
 
         Level {
             tiles: tile_instances,
+            guns: Vec::new(),
         }
     }
 
     pub fn default() -> Self {
         Self {
             tiles: HashMap::new(),
+            guns: Vec::new(),
         }
     }
 }
@@ -321,6 +336,56 @@ struct LevelInfo {
     tilematrix: DMatrix<TileId>,
     wallpaper: Vec<Point2<TileN>>,
     entrance: Point2<TileN>,
+}
+
+const ID_FOR_NO_TILE: TileId = 0b000100000000;
+const FLIP_H: TileId = 0b100000000000;
+const FLIP_V: TileId = 0b010000000000;
+const FLIP_D: TileId = 0b001000000000;
+
+fn apply_transformations(layer_tile: &tiled::LayerTile) -> TileId {
+    let mut id = layer_tile.gid;
+    if layer_tile.flip_h {
+        id = id | FLIP_H
+    };
+    if layer_tile.flip_v {
+        id = id | FLIP_V
+    };
+    if layer_tile.flip_d {
+        id = id | FLIP_D
+    };
+    id
+}
+fn strip_transformations(id: TileId) -> TileId {
+    id & !FLIP_H & !FLIP_V & !FLIP_D
+}
+
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn id_to_direction(id: TileId) -> Direction {
+    use Direction::*;
+    match (id & FLIP_H != 0, id & FLIP_V != 0, id & FLIP_D != 0) {
+        (false, _, true) => West,
+        (true, _, true) => East,
+
+        (_, true, false) => South,
+        (_, false, false) => North,
+    }
+}
+
+fn direction_to_rotation(direction: &Direction) -> N {
+    use Direction::*;
+    match direction {
+        North => 0.,
+        East => PI / 2.,
+        South => PI,
+        West => 3. * PI / 2.,
+    }
 }
 
 type TileId = Id;
@@ -332,8 +397,6 @@ struct Tilemap {
 }
 
 impl Tilemap {
-    const ID_FOR_NO_TILE: TileId = TileId::max_value();
-
     pub fn new(tilemap: &mut tiled::Map) -> Self {
         let first_gid = tilemap.tilesets[0].first_gid;
 
@@ -366,12 +429,16 @@ impl Tilemap {
             })
             .collect::<HashMap<TileId, Tile>>();
 
+        if tiles.contains_key(&ID_FOR_NO_TILE) {
+            panic!("ID_FOR_NO_TILE is not unique.")
+        }
+
         tiles.insert(
-            Self::ID_FOR_NO_TILE,
+            ID_FOR_NO_TILE,
             Tile {
                 type_: TileType::None,
                 info: tiled::Tile {
-                    id: Self::ID_FOR_NO_TILE,
+                    id: ID_FOR_NO_TILE,
                     images: Vec::new(),
                     properties: HashMap::new(),
                     objectgroup: None,
@@ -386,7 +453,7 @@ impl Tilemap {
             .tiles
             .iter()
             .flatten()
-            .map(|layer_tile| layer_tile.gid)
+            .map(|layer_tile| apply_transformations(&layer_tile))
             .collect::<Vec<TileId>>();
 
         let tilematrix =
@@ -394,14 +461,14 @@ impl Tilemap {
                 |id| {
                     id.checked_sub(first_gid)
                         .map(|id| {
-                            if tiles.contains_key(&id) {
+                            if tiles.contains_key(&strip_transformations(id)) {
                                 Some(id)
                             } else {
                                 None
                             }
                         })
                         .flatten()
-                        .unwrap_or(Self::ID_FOR_NO_TILE)
+                        .unwrap_or(ID_FOR_NO_TILE)
                 },
             );
 
@@ -451,6 +518,10 @@ impl Tilemap {
         }
     }
 
+    fn get_tile_from_id(tiles: &HashMap<TileId, Tile>, id: TileId) -> &Tile {
+        &tiles[&strip_transformations(id)]
+    }
+
     fn find_tiles_from_matrix(
         tilematrix: &DMatrixSlice<TileId>,
         tiles: &HashMap<TileId, Tile>,
@@ -459,8 +530,8 @@ impl Tilemap {
         tilematrix
             .iter()
             .enumerate()
-            .filter_map(|(i, v)| {
-                if tiles[v].type_ == tile_type {
+            .filter_map(|(i, id)| {
+                if Self::get_tile_from_id(tiles, *id).type_ == tile_type {
                     Some(tuple_to_point(tilematrix.vector_to_matrix_index(i)))
                 } else {
                     None
@@ -505,9 +576,12 @@ impl Tilemap {
         ] {
             if !wallpaper.contains(new_coords)
                 && !WALL_TILE_TYPES.contains(
-                    &tiles[tilematrix
-                        .get((new_coords.x, new_coords.y))
-                        .expect("Wallpaper machine has gone outside of bounds.")]
+                    &Self::get_tile_from_id(
+                        tiles,
+                        *tilematrix
+                            .get((new_coords.x, new_coords.y))
+                            .expect("Wallpaper machine has gone outside of bounds."),
+                    )
                     .type_,
                 )
             {
@@ -532,11 +606,14 @@ impl Tilemap {
     }
 
     fn tile_from_collider(&self, collider: &Collider<N, DefaultBodyHandle>) -> &Tile {
-        &self.tiles[collider
-            .user_data()
-            .expect("Tile has no user_data.")
-            .downcast_ref::<u32>()
-            .expect("Collider user_data is an invalid tile id.")]
+        &Self::get_tile_from_id(
+            &self.tiles,
+            *collider
+                .user_data()
+                .expect("Tile has no user_data.")
+                .downcast_ref::<u32>()
+                .expect("Collider user_data is an invalid tile id."),
+        )
     }
 
     pub fn current_level_info(&self) -> &LevelInfo {
@@ -719,6 +796,7 @@ impl MyGame {
             ctx,
             DrawParam::new()
                 .scale(vector_to_old(Vector2::new(2., 2.)))
+                .dest(point_to_old(Point2::new(10., 10.)))
                 .to_matrix(),
         );
         graphics::apply_transformations(ctx);
@@ -761,10 +839,9 @@ impl EventHandler for MyGame {
             }
         }
 
-        for (coll1_handle, coll2_handle, e) in self.physics.proximity_events() {
+        for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
             if coll1_handle == self.player.collider_handle {
                 let collider = self.physics.collider(coll2_handle);
-                println!("{:?} {:?}", collider.position(), e);
                 let collided_tile = self.tilemap.tile_from_collider(collider);
                 match collided_tile.type_ {
                     TileType::Spikes => self.player.reset(
