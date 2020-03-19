@@ -114,12 +114,14 @@ impl Player {
     const MASS: N = 10.;
 
     pub fn new(physics: &mut Physics, entrance: Point2<TileN>) -> Self {
-        let draw_param = DrawParam::new().src(Rect::new(
-            0.,
-            0.,
-            Self::SIZE / IMAGE_WIDTH,
-            Self::SIZE / IMAGE_HEIGHT,
-        ));
+        let draw_param = DrawParam::new()
+            .src(Rect::new(
+                0.,
+                0.,
+                Self::SIZE / IMAGE_WIDTH,
+                Self::SIZE / IMAGE_HEIGHT,
+            ))
+            .offset(point_to_old(Point2::new(0.5, 0.5)));
 
         let body_handle = physics.build_body(
             RigidBodyDesc::new()
@@ -299,12 +301,6 @@ impl TileInstance {
 
         let direction = id_to_direction(tile_id);
         let rotation = direction_to_rotation(&direction);
-        let offset = match &direction {
-            Direction::North => Point2::new(0., 0.),
-            Direction::South => Point2::new(Tile::SIZE, Tile::SIZE),
-            Direction::East => Point2::new(Tile::SIZE, 0.),
-            Direction::West => Point2::new(0., Tile::SIZE),
-        };
 
         let draw_param = graphics::DrawParam::new()
             .src(Rect::new(
@@ -313,8 +309,9 @@ impl TileInstance {
                 Tile::SIZE / IMAGE_WIDTH,
                 Tile::SIZE / IMAGE_HEIGHT,
             ))
+            .offset(point_to_old(Point2::new(0.5, 0.5)))
             .rotation(rotation)
-            .dest(point_to_old((real_point.coords + offset.coords).into()));
+            .dest(point_to_old(real_point));
 
         let extra_data = match tile.type_ {
             Gun => TileData::GunData(GunTile::new()),
@@ -706,6 +703,7 @@ impl Tilemap {
                         Tile::SIZE / IMAGE_WIDTH,
                         Tile::SIZE / IMAGE_HEIGHT,
                     ))
+                    .offset(point_to_old(Point2::new(0.5, 0.5)))
                     .dest(point_to_old(Tile::point_to_real(coords.clone()))),
             )?;
         }
@@ -978,7 +976,7 @@ impl EventHandler for MyGame {
         println!("FPS: {}", ggez::timer::fps(ctx));
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         self.tilemap.draw(ctx, &self.tilesheet_image)?;
-
+        // self.physics.draw_colliders(ctx);
         self.player
             .draw(ctx, &self.physics, &self.spritesheet_image)?;
         graphics::present(ctx)
