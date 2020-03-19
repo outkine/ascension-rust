@@ -203,6 +203,11 @@ enum TileType {
     None,
 }
 
+enum TileData {
+    GunData(GunTile),
+    None,
+}
+
 const WALL_TILE_TYPES: &[TileType] = &[TileType::Wall, TileType::Gun];
 
 impl Tile {
@@ -215,10 +220,11 @@ impl Tile {
 
 struct TileInstance {
     id: TileInstanceId,
-    tile: TileId,
+    tile_id: TileId,
     direction: Direction,
     draw_param: DrawParam,
     coords: Point2<usize>,
+    extra_data: TileData,
 }
 
 impl TileInstance {
@@ -279,7 +285,7 @@ impl TileInstance {
             physics.build_collider(
                 ColliderDesc::new(shape)
                     .sensor(!is_solid)
-                    .user_data(tile.info.id),
+                    .user_data(ObjectType::Tile(tile.info.id)),
                 body_handle,
                 false,
             );
@@ -310,12 +316,30 @@ impl TileInstance {
             .rotation(rotation)
             .dest(point_to_old((real_point.coords + offset.coords).into()));
 
+        let extra_data = match tile.type_ {
+            Gun => TileData::GunData(GunTile::new()),
+            _ => TileData::None,
+        };
+
         TileInstance {
             id: strip_transformations(tile_id),
-            tile: tile.info.id,
+            tile_id: tile.info.id,
             draw_param,
             direction,
             coords: coords.clone(),
+            extra_data,
+        }
+    }
+}
+
+struct GunTile {
+    bullets: Vec<Point2<N>>,
+}
+
+impl GunTile {
+    pub fn new() -> Self {
+        Self {
+            bullets: Vec::new(),
         }
     }
 }
@@ -371,15 +395,21 @@ impl Level {
         }
     }
 
-    pub fn get_all_tiles_of_type<'a>(
+    fn get_all_tiles_of_type<'a>(
         tiles: &HashMap<TileId, Tile>,
         tile_instances: &'a HashMap<TileInstanceId, TileInstance>,
         type_: TileType,
     ) -> Vec<&'a TileInstance> {
         tile_instances
             .values()
-            .filter(|tile| Tilemap::get_tile_from_id(tiles, tile.tile).type_ == type_)
+            .filter(|tile| Tilemap::get_tile_from_id(tiles, tile.tile_id).type_ == type_)
             .collect()
+    }
+
+    pub fn update(&mut self, physics: &mut Physics) {
+        for gun in &self.guns {
+            // if physics.ticks %
+        }
     }
 }
 
@@ -445,6 +475,21 @@ struct Tilemap {
     level_info: Vec<LevelInfo>,
     current_level: Level,
     current_level_number: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ObjectType {
+    Player,
+    Bullet,
+    Tile(TileInstanceId),
+}
+
+fn retrieve_user_data(collider: &Collider<N, DefaultBodyHandle>) -> ObjectType {
+    *collider
+        .user_data()
+        .expect("Tile has no user_data.")
+        .downcast_ref::<ObjectType>()
+        .expect("user_data has an invalid type.")
 }
 
 impl Tilemap {
@@ -569,7 +614,7 @@ impl Tilemap {
         }
     }
 
-    fn get_tile_from_id(tiles: &HashMap<TileId, Tile>, id: TileId) -> &Tile {
+    pub fn get_tile_from_id(tiles: &HashMap<TileId, Tile>, id: TileId) -> &Tile {
         &tiles[&strip_transformations(id)]
     }
 
@@ -640,19 +685,13 @@ impl Tilemap {
         }
     }
 
-    fn tile_from_collider(&self, collider: &Collider<N, DefaultBodyHandle>) -> &Tile {
-        &Self::get_tile_from_id(
-            &self.tiles,
-            *collider
-                .user_data()
-                .expect("Tile has no user_data.")
-                .downcast_ref::<u32>()
-                .expect("Collider user_data is an invalid tile id."),
-        )
-    }
-
     pub fn current_level_info(&self) -> &LevelInfo {
         &self.level_info[self.current_level_number]
+    }
+
+    pub fn update(&mut self, physics: &mut Physics, ticks: usize) {
+        println!("{}", ticks);
+        self.current_level.update(physics);
     }
 
     pub fn draw(&self, ctx: &mut Context, tilesheet: &graphics::Image) -> GameResult {
@@ -687,6 +726,7 @@ struct Physics {
     joint_constraint_set: nphysics2d::joint::DefaultJointConstraintSet<N>,
     force_generator_set: nphysics2d::force_generator::DefaultForceGeneratorSet<N>,
     ground_handle: DefaultBodyHandle,
+    ticks: usize,
 }
 
 impl Physics {
@@ -715,6 +755,7 @@ impl Physics {
             joint_constraint_set,
             force_generator_set,
             ground_handle,
+            ticks: 0,
         }
     }
 
@@ -726,6 +767,7 @@ impl Physics {
             &mut self.joint_constraint_set,
             &mut self.force_generator_set,
         );
+        self.ticks += 1;
     }
 
     pub fn rigid_body(&self, handle: DefaultBodyHandle) -> &RigidBody<N> {
@@ -899,25 +941,33 @@ impl EventHandler for MyGame {
             for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
                 if coll1_handle == self.player.collider_handle {
                     let collider = self.physics.collider(coll2_handle);
-                    let collided_tile = self.tilemap.tile_from_collider(collider);
-                    match collided_tile.type_ {
-                        TileType::Spikes => self.player.reset(
-                            &mut self.physics,
-                            self.tilemap.current_level_info().entrance.clone(),
-                        ),
-                        TileType::Exit => {
-                            self.physics = Physics::new();
-                            self.tilemap.init_next_level(&mut self.physics, true);
-                            self.player = Player::new(
-                                &mut self.physics,
-                                self.tilemap.current_level_info().entrance.clone(),
-                            );
+                    match retrieve_user_data(collider) {
+                        ObjectType::Tile(tile_id) => {
+                            let collided_tile =
+                                Tilemap::get_tile_from_id(&self.tilemap.tiles, tile_id);
+                            match collided_tile.type_ {
+                                TileType::Spikes => self.player.reset(
+                                    &mut self.physics,
+                                    self.tilemap.current_level_info().entrance.clone(),
+                                ),
+                                TileType::Exit => {
+                                    self.physics = Physics::new();
+                                    self.tilemap.init_next_level(&mut self.physics, true);
+                                    self.player = Player::new(
+                                        &mut self.physics,
+                                        self.tilemap.current_level_info().entrance.clone(),
+                                    );
+                                }
+                                _ => (),
+                            }
                         }
                         _ => (),
                     }
                 }
             }
 
+            self.tilemap
+                .update(&mut self.physics, ggez::timer::ticks(ctx));
             self.player.update(ctx, &mut self.physics);
             self.physics.step();
         }
