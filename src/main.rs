@@ -169,8 +169,11 @@ enum TileType {
     Exit,
     Spikes,
     Wall,
+    Gun,
     None,
 }
+
+const WALL_TILE_TYPES: &[TileType] = &[TileType::Wall, TileType::Gun];
 
 impl Tile {
     const SIZE: N = 10.;
@@ -228,28 +231,25 @@ impl TileInstance {
             }
         };
 
-        match tile.type_ {
-            TileType::Wall => {
-                physics.build_collider(
-                    ColliderDesc::new(shape).translation(translation),
-                    physics.ground_handle,
-                    false,
-                );
-            }
-            _ => {
-                let body_handle = physics.build_body(
-                    RigidBodyDesc::new()
-                        .translation(translation)
-                        .status(object::BodyStatus::Static),
-                );
-                physics.build_collider(
-                    ColliderDesc::new(shape)
-                        .sensor(!is_solid)
-                        .user_data(tile.info.id),
-                    body_handle,
-                    false,
-                );
-            }
+        if WALL_TILE_TYPES.contains(&tile.type_) {
+            physics.build_collider(
+                ColliderDesc::new(shape).translation(translation),
+                physics.ground_handle,
+                false,
+            );
+        } else {
+            let body_handle = physics.build_body(
+                RigidBodyDesc::new()
+                    .translation(translation)
+                    .status(object::BodyStatus::Static),
+            );
+            physics.build_collider(
+                ColliderDesc::new(shape)
+                    .sensor(!is_solid)
+                    .user_data(tile.info.id),
+                body_handle,
+                false,
+            );
         }
 
         let tile_spritesheet_width = (IMAGE_WIDTH / Tile::SIZE).floor() as Id;
@@ -350,6 +350,7 @@ impl Tilemap {
                         "Exit" => Exit,
                         "Spikes" => Spikes,
                         "Wall" => Wall,
+                        "Gun" => Gun,
                         tile_type => panic!("Unknown tile type: {}", tile_type),
                     }
                 });
@@ -503,11 +504,12 @@ impl Tilemap {
             ),
         ] {
             if !wallpaper.contains(new_coords)
-                && tiles[tilematrix
-                    .get((new_coords.x, new_coords.y))
-                    .expect("Wallpaper machine has gone outside of bounds.")]
-                .type_
-                    != TileType::Wall
+                && !WALL_TILE_TYPES.contains(
+                    &tiles[tilematrix
+                        .get((new_coords.x, new_coords.y))
+                        .expect("Wallpaper machine has gone outside of bounds.")]
+                    .type_,
+                )
             {
                 wallpaper.push(new_coords.clone());
                 Tilemap::build_wallpaper(tilematrix, tiles, *new_coords, wallpaper);
@@ -799,7 +801,6 @@ impl EventHandler for MyGame {
 fn main() {
     let resource_dir = std::path::PathBuf::from("./assets");
 
-    // Make a Context.
     let (mut ctx, mut event_loop) = ContextBuilder::new("ascension-rust", "Anton")
         .add_resource_path(resource_dir)
         .window_setup(
