@@ -17,6 +17,7 @@ use nphysics2d::object::{
     RigidBodyDesc,
 };
 use nphysics2d::{material, object, world};
+use std::any::TypeId;
 use std::f32::consts::PI;
 use tiled::PropertyValue;
 
@@ -574,19 +575,20 @@ impl Tilemap {
                 coords.y,
             ),
         ] {
-            if !wallpaper.contains(new_coords)
-                && !WALL_TILE_TYPES.contains(
-                    &Self::get_tile_from_id(
-                        tiles,
-                        *tilematrix
-                            .get((new_coords.x, new_coords.y))
-                            .expect("Wallpaper machine has gone outside of bounds."),
-                    )
-                    .type_,
-                )
-            {
+            let tile_type = &Self::get_tile_from_id(
+                tiles,
+                *tilematrix
+                    .get((new_coords.x, new_coords.y))
+                    .expect("Wallpaper machine has gone outside of bounds."),
+            )
+            .type_;
+            if !wallpaper.contains(new_coords) && *tile_type != TileType::Wall {
                 wallpaper.push(new_coords.clone());
-                Tilemap::build_wallpaper(tilematrix, tiles, *new_coords, wallpaper);
+                // Still place a wallpaper behind all non-Wall wall blocks, since some of them
+                // have open spaces that the wallpaper can shine through
+                if !WALL_TILE_TYPES.contains(tile_type) {
+                    Tilemap::build_wallpaper(tilematrix, tiles, *new_coords, wallpaper);
+                }
             }
         }
     }
