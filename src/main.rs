@@ -662,7 +662,10 @@ impl Physics {
     pub fn new() -> Self {
         let geometrical_world = world::DefaultGeometricalWorld::new();
         let gravity = Vector2::y() * Self::GRAVITY;
-        let mechanical_world = world::DefaultMechanicalWorld::new(gravity);
+        let mut mechanical_world = world::DefaultMechanicalWorld::new(gravity);
+        mechanical_world
+            .solver
+            .set_contact_model(Box::new(nphysics2d::solver::SignoriniModel::new()));
         let mut body_set = object::DefaultBodySet::new();
         let collider_set = object::DefaultColliderSet::new();
 
