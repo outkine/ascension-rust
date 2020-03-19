@@ -834,44 +834,48 @@ impl MyGame {
 
 impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
-        for (coll1_handle, _coll2_handle, manifold) in self.physics.collision_events() {
-            if *coll1_handle == self.player.collider_handle
-                && manifold.contacts().any(|contact| {
-                    contact.contact.normal.y.round() > 0. && contact.contact.normal.x.round() == 0.
-                })
-            {
-                self.player.on_ground = true;
-            }
-        }
-
-        for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
-            if coll1_handle == self.player.collider_handle {
-                let collider = self.physics.collider(coll2_handle);
-                let collided_tile = self.tilemap.tile_from_collider(collider);
-                match collided_tile.type_ {
-                    TileType::Spikes => self.player.reset(
-                        &mut self.physics,
-                        self.tilemap.current_level_info().entrance.clone(),
-                    ),
-                    TileType::Exit => {
-                        self.physics = Physics::new();
-                        self.tilemap.init_next_level(&mut self.physics, true);
-                        self.player = Player::new(
-                            &mut self.physics,
-                            self.tilemap.current_level_info().entrance.clone(),
-                        );
-                    }
-                    _ => (),
+        while ggez::timer::check_update_time(ctx, 60) {
+            for (coll1_handle, _coll2_handle, manifold) in self.physics.collision_events() {
+                if *coll1_handle == self.player.collider_handle
+                    && manifold.contacts().any(|contact| {
+                        contact.contact.normal.y.round() > 0.
+                            && contact.contact.normal.x.round() == 0.
+                    })
+                {
+                    self.player.on_ground = true;
                 }
             }
-        }
 
-        self.player.update(ctx, &mut self.physics);
-        self.physics.step();
+            for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
+                if coll1_handle == self.player.collider_handle {
+                    let collider = self.physics.collider(coll2_handle);
+                    let collided_tile = self.tilemap.tile_from_collider(collider);
+                    match collided_tile.type_ {
+                        TileType::Spikes => self.player.reset(
+                            &mut self.physics,
+                            self.tilemap.current_level_info().entrance.clone(),
+                        ),
+                        TileType::Exit => {
+                            self.physics = Physics::new();
+                            self.tilemap.init_next_level(&mut self.physics, true);
+                            self.player = Player::new(
+                                &mut self.physics,
+                                self.tilemap.current_level_info().entrance.clone(),
+                            );
+                        }
+                        _ => (),
+                    }
+                }
+            }
+
+            self.player.update(ctx, &mut self.physics);
+            self.physics.step();
+        }
         Ok(())
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        println!("FPS: {}", ggez::timer::fps(ctx));
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         self.tilemap.draw(ctx, &self.tilesheet_image)?;
         self.player
