@@ -5,15 +5,15 @@ use std::default::Default;
 
 use ggez::event::{EventHandler, KeyCode};
 use ggez::graphics::Color;
-use ggez::graphics::{DrawParam, Rect};
+use ggez::graphics::{DrawParam, Image, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
 use na::{DMatrix, DMatrixSlice, Isometry2, Point2, Scalar, Vector2};
 use ncollide2d::shape::{Cuboid, ShapeHandle};
-use nphysics2d::algebra::{Force2, ForceType};
+use nphysics2d::algebra::{Force2, ForceType, Velocity2};
 use nphysics2d::object::{
-    Body, Collider, ColliderDesc, DefaultBodyHandle, DefaultColliderHandle, RigidBody,
+    Body, BodyStatus, Collider, ColliderDesc, DefaultBodyHandle, DefaultColliderHandle, RigidBody,
     RigidBodyDesc,
 };
 use nphysics2d::{material, object, world};
@@ -53,6 +53,9 @@ fn point_to_tuple<N: Copy + Scalar>(point: Point2<N>) -> (N, N) {
 fn point_to_vector<N: Copy + Scalar>(point: Point2<N>) -> Vector2<N> {
     Vector2::new(point.x, point.y)
 }
+fn point_to_velocity<N: na::RealField + Copy + Scalar>(point: Point2<N>) -> Velocity2<N> {
+    Velocity2::linear(point.x, point.y)
+}
 
 fn add<N: std::ops::Add<Output = N> + Copy + Scalar>(
     point1: Point2<N>,
@@ -66,15 +69,6 @@ fn get_id() -> Id {
     use std::sync::atomic;
     static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
     COUNTER.fetch_add(1, atomic::Ordering::Relaxed) as Id
-}
-
-fn create_directions(coords: Point2<TileN>) -> Vec<Option<Point2<TileN>>> {
-    vec![
-        coords.x.checked_sub(1).map(|x| Point2::new(x, coords.y)),
-        coords.y.checked_sub(1).map(|y| Point2::new(coords.x, y)),
-        Some(Point2::new(coords.x + 1, coords.y)),
-        Some(Point2::new(coords.x, coords.y + 1)),
-    ]
 }
 
 fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) -> GameResult {
@@ -100,58 +94,114 @@ fn draw_rect(ctx: &mut Context, rect: Rect, color: graphics::Color) -> GameResul
     Ok(())
 }
 
-struct Player {
+struct Entity {
     draw_param: DrawParam,
     body_handle: DefaultBodyHandle,
     collider_handle: DefaultColliderHandle,
+}
+
+impl Entity {
+    pub fn new(
+        physics: &mut Physics,
+        sprite_pos: Point2<N>,
+        pos: Point2<N>,
+        size: Point2<N>,
+        rigid_body_desc: RigidBodyDesc<N>,
+        is_sensor: bool,
+        user_data: ObjectType,
+        ccd_enabled: bool,
+    ) -> Self {
+        let draw_param = DrawParam::new()
+            .src(Rect::new(
+                sprite_pos.x * (1. / IMAGE_WIDTH),
+                sprite_pos.y * (1. / IMAGE_HEIGHT),
+                size.x / IMAGE_WIDTH,
+                size.y / IMAGE_HEIGHT,
+            ))
+            .offset(point_to_old(Point2::new(0.5, 0.5)));
+
+        let body_handle = physics.build_body(rigid_body_desc.translation(point_to_vector(pos)));
+
+        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
+            size.x / 2. - 0.01,
+            size.y / 2. - 0.01,
+        )));
+
+        let collider_handle = physics.build_collider(
+            ColliderDesc::new(shape)
+                .sensor(is_sensor)
+                .user_data(user_data),
+            body_handle,
+            ccd_enabled,
+        );
+
+        Entity {
+            draw_param,
+            body_handle,
+            collider_handle,
+        }
+    }
+
+    pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) -> GameResult {
+        let pos = self.position(physics);
+        graphics::draw(ctx, spritesheet, self.draw_param.dest(point_to_old(pos)))?;
+        Ok(())
+    }
+
+    pub fn rigid_body<'a>(&self, physics: &'a Physics) -> &'a RigidBody<N> {
+        physics.rigid_body(self.body_handle)
+    }
+
+    pub fn rigid_body_mut<'a>(&mut self, physics: &'a mut Physics) -> &'a mut RigidBody<N> {
+        physics.rigid_body_mut(self.body_handle)
+    }
+
+    pub fn position(&self, physics: &Physics) -> Point2<N> {
+        isometry_to_point(*self.rigid_body(physics).position())
+    }
+
+    pub fn set_position(&mut self, physics: &mut Physics, point: Point2<N>) {
+        self.rigid_body_mut(physics)
+            .set_position(point_to_isometry(point));
+    }
+}
+
+struct Player {
+    entity: Entity,
     on_ground: bool,
 }
 
 impl Player {
     const X_POWER: N = 100.;
     const Y_POWER: N = 200.;
-    const SIZE: N = 10.;
+    const SIZE: (N, N) = (10., 10.);
+    const SPRITE_POS: (N, N) = (0., 0.);
     const MASS: N = 10.;
 
     pub fn new(physics: &mut Physics, entrance: Point2<TileN>) -> Self {
-        let draw_param = DrawParam::new()
-            .src(Rect::new(
-                0.,
-                0.,
-                Self::SIZE / IMAGE_WIDTH,
-                Self::SIZE / IMAGE_HEIGHT,
-            ))
-            .offset(point_to_old(Point2::new(0.5, 0.5)));
-
-        let body_handle = physics.build_body(
-            RigidBodyDesc::new()
-                .mass(Self::MASS)
-                .translation(point_to_vector(Tile::point_to_real(entrance))),
+        let entity = Entity::new(
+            physics,
+            tuple_to_point(Self::SPRITE_POS),
+            Tile::point_to_real(entrance),
+            tuple_to_point(Self::SIZE),
+            RigidBodyDesc::new().mass(Self::MASS),
+            false,
+            ObjectType::Player,
+            true,
         );
-
-        let shape = ShapeHandle::new(Cuboid::new(Vector2::new(
-            Player::SIZE / 2. - 0.01,
-            Player::SIZE / 2. - 0.01,
-        )));
-
-        let collider_handle = physics.build_collider(ColliderDesc::new(shape), body_handle, true);
-
-        Player {
-            draw_param,
-            body_handle,
-            collider_handle,
+        Self {
+            entity,
             on_ground: true,
         }
     }
 
     pub fn reset(&mut self, physics: &mut Physics, entrance: Point2<TileN>) {
-        physics
-            .rigid_body_mut(self.body_handle)
-            .set_position(point_to_isometry(Tile::point_to_real(entrance)));
+        self.entity
+            .set_position(physics, Tile::point_to_real(entrance));
     }
 
     pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics) {
-        let rigid_body = physics.rigid_body_mut(self.body_handle);
+        let rigid_body = self.entity.rigid_body_mut(physics);
         if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
             self.on_ground = false;
             rigid_body.apply_force(
@@ -162,7 +212,7 @@ impl Player {
             );
         }
 
-        let direction = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
+        let x_dir = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
             -1.
         } else if keyboard::is_key_pressed(ctx, KeyCode::Right) {
             1.
@@ -170,23 +220,9 @@ impl Player {
             0.
         };
         rigid_body.set_linear_velocity(Vector2::new(
-            direction * Self::X_POWER,
+            x_dir * Self::X_POWER,
             rigid_body.velocity().linear[1],
         ));
-    }
-
-    pub fn draw(
-        &self,
-        ctx: &mut Context,
-        physics: &Physics,
-        spritesheet: &graphics::Image,
-    ) -> GameResult {
-        let rigid_body = physics.rigid_body(self.body_handle);
-        let coords = isometry_to_point(*rigid_body.position());
-
-        graphics::draw(ctx, spritesheet, self.draw_param.dest(point_to_old(coords)))?;
-
-        Ok(())
     }
 }
 
@@ -232,7 +268,7 @@ struct TileInstance {
 impl TileInstance {
     pub fn new(physics: &mut Physics, coords: Point2<TileN>, tile: &Tile, tile_id: TileId) -> Self {
         let real_point = Tile::point_to_real(coords);
-        let vector = point_to_vector(real_point.clone());
+        let vector = point_to_vector(real_point);
 
         let is_solid = *tile
             .info
@@ -282,7 +318,7 @@ impl TileInstance {
             let body_handle = physics.build_body(
                 RigidBodyDesc::new()
                     .translation(translation)
-                    .status(object::BodyStatus::Static),
+                    .status(BodyStatus::Static),
             );
             physics.build_collider(
                 ColliderDesc::new(shape)
@@ -299,8 +335,8 @@ impl TileInstance {
             (tile.info.id / tile_spritesheet_width),
         );
 
-        let direction = id_to_direction(tile_id);
-        let rotation = direction_to_rotation(&direction);
+        let direction = Direction::from_id(tile_id);
+        let rotation = direction.to_rotation();
 
         let draw_param = graphics::DrawParam::new()
             .src(Rect::new(
@@ -311,10 +347,10 @@ impl TileInstance {
             ))
             .offset(point_to_old(Point2::new(0.5, 0.5)))
             .rotation(rotation)
-            .dest(point_to_old(real_point));
+            .dest(point_to_old(real_point.clone()));
 
         let extra_data = match tile.type_ {
-            Gun => TileData::GunData(GunTile::new()),
+            TileType::Gun => TileData::GunData(GunTile::new()),
             _ => TileData::None,
         };
 
@@ -330,21 +366,49 @@ impl TileInstance {
 }
 
 struct GunTile {
-    bullets: Vec<Point2<N>>,
+    bullets: Vec<Entity>,
 }
 
 impl GunTile {
+    const SHOOTING_FREQUENCY: usize = 100;
+    const BULLET_SIZE: (N, N) = (4., 4.);
+    const BULLET_SPRITE_POS: (N, N) = (10., 0.);
+    const BULLET_SPEED: N = 20.;
+
     pub fn new() -> Self {
         Self {
             bullets: Vec::new(),
         }
+    }
+
+    pub fn shoot(&mut self, physics: &mut Physics, pos: Point2<TileN>, dir: Direction) {
+        let entity = Entity::new(
+            physics,
+            tuple_to_point(Self::BULLET_SPRITE_POS),
+            Tile::point_to_real(pos),
+            tuple_to_point(Self::BULLET_SIZE),
+            RigidBodyDesc::new()
+                .status(BodyStatus::Kinematic)
+                .velocity(point_to_velocity(dir.to_point() * Self::BULLET_SPEED)),
+            true,
+            ObjectType::Bullet,
+            false,
+        );
+        self.bullets.push(entity);
+    }
+
+    pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) -> GameResult {
+        for bullet in &self.bullets {
+            bullet.draw(ctx, physics, spritesheet);
+        }
+
+        Ok(())
     }
 }
 
 type TileInstanceId = Id;
 struct Level {
     tiles: HashMap<TileInstanceId, TileInstance>,
-    guns: Vec<TileInstanceId>,
 }
 
 impl Level {
@@ -374,21 +438,14 @@ impl Level {
             })
             .collect();
 
-        let guns = Self::get_all_tiles_of_type(tiles, &tile_instances, TileType::Gun)
-            .iter()
-            .map(|tile| tile.id)
-            .collect();
-
         Level {
             tiles: tile_instances,
-            guns,
         }
     }
 
     pub fn default() -> Self {
         Self {
             tiles: HashMap::new(),
-            guns: Vec::new(),
         }
     }
 
@@ -404,9 +461,35 @@ impl Level {
     }
 
     pub fn update(&mut self, physics: &mut Physics) {
-        for gun in &self.guns {
-            // if physics.ticks %
+        for tile in self.tiles.values_mut() {
+            match &mut tile.extra_data {
+                TileData::GunData(ref mut gun_tile) => {
+                    if physics.ticks % GunTile::SHOOTING_FREQUENCY == 0 {
+                        gun_tile.shoot(physics, tile.coords.clone(), tile.direction);
+                    }
+                }
+                _ => (),
+            }
         }
+    }
+
+    pub fn draw(
+        &self,
+        ctx: &mut Context,
+        physics: &Physics,
+        tilesheet: &Image,
+        spritesheet: &Image,
+    ) -> GameResult {
+        for tile in self.tiles.values() {
+            graphics::draw(ctx, tilesheet, tile.draw_param)?;
+
+            match &tile.extra_data {
+                TileData::GunData(gun_tile) => gun_tile.draw(ctx, physics, spritesheet)?,
+                _ => (),
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -438,6 +521,7 @@ fn strip_transformations(id: TileId) -> TileId {
     id & !FLIP_H & !FLIP_V & !FLIP_D
 }
 
+#[derive(PartialEq, Debug, Clone, Copy)]
 enum Direction {
     North,
     South,
@@ -445,24 +529,45 @@ enum Direction {
     West,
 }
 
-fn id_to_direction(id: TileId) -> Direction {
-    use Direction::*;
-    match (id & FLIP_H != 0, id & FLIP_V != 0, id & FLIP_D != 0) {
-        (false, _, true) => West,
-        (true, _, true) => East,
+impl Direction {
+    fn from_id(id: TileId) -> Self {
+        use Direction::*;
+        match (id & FLIP_H != 0, id & FLIP_V != 0, id & FLIP_D != 0) {
+            (false, _, true) => West,
+            (true, _, true) => East,
 
-        (_, true, false) => South,
-        (_, false, false) => North,
+            (_, true, false) => South,
+            (_, false, false) => North,
+        }
     }
-}
 
-fn direction_to_rotation(direction: &Direction) -> N {
-    use Direction::*;
-    match direction {
-        North => 0.,
-        East => PI / 2.,
-        South => PI,
-        West => 3. * PI / 2.,
+    fn to_rotation(self) -> N {
+        use Direction::*;
+        match self {
+            North => 0.,
+            East => PI / 2.,
+            South => PI,
+            West => 3. * PI / 2.,
+        }
+    }
+
+    fn to_point(self) -> Point2<N> {
+        use Direction::*;
+        match self {
+            West => Point2::new(-1., 0.),
+            North => Point2::new(0., -1.),
+            East => Point2::new(1., 0.),
+            South => Point2::new(0., 1.),
+        }
+    }
+
+    fn create_adjascent(point: Point2<TileN>) -> Vec<Option<Point2<TileN>>> {
+        vec![
+            point.x.checked_sub(1).map(|x| Point2::new(x, point.y)),
+            point.y.checked_sub(1).map(|y| Point2::new(point.x, y)),
+            Some(Point2::new(point.x + 1, point.y)),
+            Some(Point2::new(point.x, point.y + 1)),
+        ]
     }
 }
 
@@ -474,7 +579,7 @@ struct Tilemap {
     current_level_number: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 enum ObjectType {
     Player,
     Bullet,
@@ -649,7 +754,7 @@ impl Tilemap {
         coords: Point2<usize>,
         wallpaper: &mut Vec<Point2<usize>>,
     ) {
-        for new_coords in create_directions(coords).iter().flatten() {
+        for new_coords in Direction::create_adjascent(coords).iter().flatten() {
             let tile_type = &Self::get_tile_from_id(
                 tiles,
                 *tilematrix
@@ -686,12 +791,17 @@ impl Tilemap {
         &self.level_info[self.current_level_number]
     }
 
-    pub fn update(&mut self, physics: &mut Physics, ticks: usize) {
-        println!("{}", ticks);
+    pub fn update(&mut self, physics: &mut Physics) {
         self.current_level.update(physics);
     }
 
-    pub fn draw(&self, ctx: &mut Context, tilesheet: &graphics::Image) -> GameResult {
+    pub fn draw(
+        &self,
+        ctx: &mut Context,
+        physics: &Physics,
+        tilesheet: &Image,
+        spritesheet: &Image,
+    ) -> GameResult {
         for coords in self.current_level_info().wallpaper.iter() {
             graphics::draw(
                 ctx,
@@ -708,9 +818,8 @@ impl Tilemap {
             )?;
         }
 
-        for tile in self.current_level.tiles.values() {
-            graphics::draw(ctx, tilesheet, tile.draw_param)?;
-        }
+        self.current_level
+            .draw(ctx, physics, tilesheet, spritesheet)?;
 
         Ok(())
     }
@@ -881,8 +990,8 @@ struct MyGame {
     player: Player,
     physics: Physics,
     tilemap: Tilemap,
-    tilesheet_image: graphics::Image,
-    spritesheet_image: graphics::Image,
+    tilesheet_image: Image,
+    spritesheet_image: Image,
 }
 
 impl MyGame {
@@ -905,8 +1014,8 @@ impl MyGame {
 
         let mut physics = Physics::new();
 
-        let tilesheet_image = graphics::Image::new(ctx, "/tilesheet.png").unwrap();
-        let spritesheet_image = graphics::Image::new(ctx, "/spritesheet.png").unwrap();
+        let tilesheet_image = Image::new(ctx, "/tilesheet.png").unwrap();
+        let spritesheet_image = Image::new(ctx, "/spritesheet.png").unwrap();
 
         tilemap.init_next_level(&mut physics, false);
 
@@ -926,7 +1035,7 @@ impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         while ggez::timer::check_update_time(ctx, 60) {
             for (coll1_handle, _coll2_handle, manifold) in self.physics.collision_events() {
-                if *coll1_handle == self.player.collider_handle
+                if *coll1_handle == self.player.entity.collider_handle
                     && manifold.contacts().any(|contact| {
                         contact.contact.normal.y.round() > 0.
                             && contact.contact.normal.x.round() == 0.
@@ -937,8 +1046,17 @@ impl EventHandler for MyGame {
             }
 
             for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
-                if coll1_handle == self.player.collider_handle {
-                    let collider = self.physics.collider(coll2_handle);
+                let player_handle = self.player.entity.collider_handle;
+                let other_handle = if coll1_handle == player_handle {
+                    Some(coll2_handle)
+                } else if coll2_handle == player_handle {
+                    Some(coll1_handle)
+                } else {
+                    None
+                };
+
+                other_handle.map(|handle| {
+                    let collider = self.physics.collider(handle);
                     match retrieve_user_data(collider) {
                         ObjectType::Tile(tile_id) => {
                             let collided_tile =
@@ -959,13 +1077,16 @@ impl EventHandler for MyGame {
                                 _ => (),
                             }
                         }
+                        ObjectType::Bullet => self.player.reset(
+                            &mut self.physics,
+                            self.tilemap.current_level_info().entrance.clone(),
+                        ),
                         _ => (),
                     }
-                }
+                });
             }
 
-            self.tilemap
-                .update(&mut self.physics, ggez::timer::ticks(ctx));
+            self.tilemap.update(&mut self.physics);
             self.player.update(ctx, &mut self.physics);
             self.physics.step();
         }
@@ -975,9 +1096,15 @@ impl EventHandler for MyGame {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         println!("FPS: {}", ggez::timer::fps(ctx));
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
-        self.tilemap.draw(ctx, &self.tilesheet_image)?;
-        // self.physics.draw_colliders(ctx);
+        self.tilemap.draw(
+            ctx,
+            &self.physics,
+            &self.tilesheet_image,
+            &self.spritesheet_image,
+        )?;
+        // self.physics.draw_colliders(ctx)?;
         self.player
+            .entity
             .draw(ctx, &self.physics, &self.spritesheet_image)?;
         graphics::present(ctx)
     }
@@ -995,7 +1122,7 @@ fn main() {
         )
         .window_mode(ggez::conf::WindowMode::default().dimensions(300., 300.))
         .build()
-        .expect("Could not create ggez context.");
+        .expect("Could not create lgez context.");
 
     let mut my_game = MyGame::new(&mut ctx);
 
