@@ -94,6 +94,7 @@ fn draw_rect(ctx: &mut Context, rect: Rect, color: graphics::Color) -> GameResul
     Ok(())
 }
 
+#[derive(Debug)]
 struct Entity {
     draw_param: DrawParam,
     body_handle: DefaultBodyHandle,
@@ -226,6 +227,7 @@ impl Player {
     }
 }
 
+#[derive(Debug)]
 struct Tile {
     type_: TileType,
     info: tiled::Tile,
@@ -241,6 +243,7 @@ enum TileType {
     None,
 }
 
+#[derive(Debug)]
 enum TileData {
     GunData(GunTile),
     None,
@@ -256,6 +259,7 @@ impl Tile {
     }
 }
 
+#[derive(Debug)]
 struct TileInstance {
     id: TileInstanceId,
     tile_id: TileId,
@@ -310,7 +314,9 @@ impl TileInstance {
 
         if WALL_TILE_TYPES.contains(&tile.type_) {
             physics.build_collider(
-                ColliderDesc::new(shape).translation(translation),
+                ColliderDesc::new(shape)
+                    .translation(translation)
+                    .user_data(ObjectType::Tile(tile.info.id)),
                 physics.ground_handle,
                 false,
             );
@@ -355,7 +361,7 @@ impl TileInstance {
         };
 
         TileInstance {
-            id: strip_transformations(tile_id),
+            id: get_id(),
             tile_id: tile.info.id,
             draw_param,
             direction,
@@ -365,6 +371,7 @@ impl TileInstance {
     }
 }
 
+#[derive(Debug)]
 struct GunTile {
     bullets: Vec<Entity>,
 }
@@ -381,20 +388,32 @@ impl GunTile {
         }
     }
 
-    pub fn shoot(&mut self, physics: &mut Physics, pos: Point2<TileN>, dir: Direction) {
+    pub fn shoot(
+        &mut self,
+        physics: &mut Physics,
+        pos: Point2<TileN>,
+        dir: Direction,
+        id: TileInstanceId,
+    ) {
         let entity = Entity::new(
             physics,
             tuple_to_point(Self::BULLET_SPRITE_POS),
-            Tile::point_to_real(pos),
+            add(Tile::point_to_real(pos), dir.to_point() * Tile::SIZE),
             tuple_to_point(Self::BULLET_SIZE),
             RigidBodyDesc::new()
-                .status(BodyStatus::Kinematic)
+                .status(BodyStatus::Dynamic)
+                .gravity_enabled(false)
                 .velocity(point_to_velocity(dir.to_point() * Self::BULLET_SPEED)),
-            true,
-            ObjectType::Bullet,
+            false,
+            ObjectType::Bullet(id),
             false,
         );
         self.bullets.push(entity);
+    }
+
+    pub fn remove_bullet(&mut self, physics: &mut Physics) {
+        let bullet = self.bullets.remove(0);
+        physics.body_set.remove(bullet.body_handle);
     }
 
     pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) -> GameResult {
@@ -461,11 +480,11 @@ impl Level {
     }
 
     pub fn update(&mut self, physics: &mut Physics) {
-        for tile in self.tiles.values_mut() {
+        for (instance_id, tile) in self.tiles.iter_mut() {
             match &mut tile.extra_data {
                 TileData::GunData(ref mut gun_tile) => {
                     if physics.ticks % GunTile::SHOOTING_FREQUENCY == 0 {
-                        gun_tile.shoot(physics, tile.coords.clone(), tile.direction);
+                        gun_tile.shoot(physics, tile.coords.clone(), tile.direction, *instance_id);
                     }
                 }
                 _ => (),
@@ -481,12 +500,12 @@ impl Level {
         spritesheet: &Image,
     ) -> GameResult {
         for tile in self.tiles.values() {
-            graphics::draw(ctx, tilesheet, tile.draw_param)?;
-
             match &tile.extra_data {
                 TileData::GunData(gun_tile) => gun_tile.draw(ctx, physics, spritesheet)?,
                 _ => (),
             }
+
+            graphics::draw(ctx, tilesheet, tile.draw_param)?;
         }
 
         Ok(())
@@ -582,7 +601,7 @@ struct Tilemap {
 #[derive(PartialEq, Debug, Clone, Copy)]
 enum ObjectType {
     Player,
-    Bullet,
+    Bullet(TileInstanceId),
     Tile(TileInstanceId),
 }
 
@@ -909,9 +928,9 @@ impl Physics {
     pub fn collision_events(
         &self,
     ) -> Vec<(
-        &DefaultColliderHandle,
-        &DefaultColliderHandle,
-        &ncollide2d::query::ContactManifold<N>,
+        DefaultColliderHandle,
+        DefaultColliderHandle,
+        ncollide2d::query::ContactManifold<N>,
     )> {
         self.geometrical_world
             .contact_events()
@@ -920,7 +939,7 @@ impl Physics {
                 ncollide2d::pipeline::narrow_phase::ContactEvent::Started(handle1, handle2) => self
                     .geometrical_world
                     .contact_pair(&self.collider_set, *handle1, *handle2, true)
-                    .map(|(_, _, _, _, _, manifold)| (handle1, handle2, manifold)),
+                    .map(|(_, _, _, _, _, manifold)| (*handle1, *handle2, manifold.clone())),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -1019,7 +1038,7 @@ impl MyGame {
 
         tilemap.init_next_level(&mut physics, false);
 
-        let mut player = Player::new(&mut physics, tilemap.current_level_info().entrance.clone());
+        let player = Player::new(&mut physics, tilemap.current_level_info().entrance.clone());
 
         MyGame {
             player,
@@ -1034,30 +1053,58 @@ impl MyGame {
 impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         while ggez::timer::check_update_time(ctx, 60) {
-            for (coll1_handle, _coll2_handle, manifold) in self.physics.collision_events() {
-                if *coll1_handle == self.player.entity.collider_handle
-                    && manifold.contacts().any(|contact| {
-                        contact.contact.normal.y.round() > 0.
-                            && contact.contact.normal.x.round() == 0.
-                    })
-                {
-                    self.player.on_ground = true;
+            self.physics.step();
+            self.tilemap.update(&mut self.physics);
+            self.player.update(ctx, &mut self.physics);
+            for (coll1_handle, coll2_handle, manifold) in self.physics.collision_events() {
+                let user_datas = (
+                    retrieve_user_data(self.physics.collider(coll1_handle)),
+                    retrieve_user_data(self.physics.collider(coll2_handle)),
+                );
+                println!("Collision: {:?}", user_datas);
+
+                match user_datas {
+                    (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
+                        ObjectType::Bullet(_) => self.player.reset(
+                            &mut self.physics,
+                            self.tilemap.current_level_info().entrance.clone(),
+                        ),
+                        _ => {
+                            if manifold.contacts().any(|contact| {
+                                contact.contact.normal.y.round() > 0.
+                                    && contact.contact.normal.x.round() == 0.
+                            }) {
+                                self.player.on_ground = true;
+                            }
+                        }
+                    },
+                    (ObjectType::Bullet(gun_id), _) | (_, ObjectType::Bullet(gun_id)) => {
+                        if let Some(TileData::GunData(ref mut gun_tile)) = &mut self
+                            .tilemap
+                            .current_level
+                            .tiles
+                            .get_mut(&gun_id)
+                            .map(|tile| &mut tile.extra_data)
+                        {
+                            gun_tile.remove_bullet(&mut self.physics);
+                        } else {
+                            panic!("user_data points to nonexistent gun.")
+                        }
+                    }
+                    _ => (),
                 }
             }
 
             for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
-                let player_handle = self.player.entity.collider_handle;
-                let other_handle = if coll1_handle == player_handle {
-                    Some(coll2_handle)
-                } else if coll2_handle == player_handle {
-                    Some(coll1_handle)
-                } else {
-                    None
-                };
+                let user_datas = (
+                    retrieve_user_data(self.physics.collider(coll1_handle)),
+                    retrieve_user_data(self.physics.collider(coll2_handle)),
+                );
 
-                other_handle.map(|handle| {
-                    let collider = self.physics.collider(handle);
-                    match retrieve_user_data(collider) {
+                println!("Proximity: {:?}", user_datas);
+
+                match user_datas {
+                    (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
                         ObjectType::Tile(tile_id) => {
                             let collided_tile =
                                 Tilemap::get_tile_from_id(&self.tilemap.tiles, tile_id);
@@ -1077,18 +1124,11 @@ impl EventHandler for MyGame {
                                 _ => (),
                             }
                         }
-                        ObjectType::Bullet => self.player.reset(
-                            &mut self.physics,
-                            self.tilemap.current_level_info().entrance.clone(),
-                        ),
                         _ => (),
-                    }
-                });
+                    },
+                    _ => (),
+                }
             }
-
-            self.tilemap.update(&mut self.physics);
-            self.player.update(ctx, &mut self.physics);
-            self.physics.step();
         }
         Ok(())
     }
@@ -1102,7 +1142,7 @@ impl EventHandler for MyGame {
             &self.tilesheet_image,
             &self.spritesheet_image,
         )?;
-        // self.physics.draw_colliders(ctx)?;
+        self.physics.draw_colliders(ctx)?;
         self.player
             .entity
             .draw(ctx, &self.physics, &self.spritesheet_image)?;
