@@ -10,7 +10,7 @@ use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
 use na::{DMatrix, DMatrixSlice, Isometry2, Point2, Scalar, Vector2};
-use ncollide2d::shape::{Cuboid, ShapeHandle};
+use ncollide2d::shape::{Cuboid, Shape, ShapeHandle};
 use nphysics2d::algebra::{Force2, ForceType};
 use nphysics2d::object::{
     Body, Collider, ColliderDesc, DefaultBodyHandle, DefaultColliderHandle, RigidBody,
@@ -191,7 +191,15 @@ struct TileInstance {
 }
 
 impl TileInstance {
-    pub fn new(physics: &mut Physics, coords: Point2<TileN>, tile: &Tile, tile_id: TileId) -> Self {
+    pub fn new(
+        physics: &mut Physics,
+        coords: Point2<TileN>,
+        tile: &Tile,
+        tile_id: TileId,
+    ) -> (
+        Self,
+        Option<(ncollide2d::shape::ShapeHandle<N>, Vector2<N>)>,
+    ) {
         let real_point = Tile::point_to_real(coords);
         let vector = point_to_vector(real_point.clone());
 
@@ -233,26 +241,26 @@ impl TileInstance {
             }
         };
 
-        if WALL_TILE_TYPES.contains(&tile.type_) {
-            physics.build_collider(
-                ColliderDesc::new(shape).translation(translation),
-                physics.ground_handle,
-                false,
-            );
-        } else {
-            let body_handle = physics.build_body(
-                RigidBodyDesc::new()
-                    .translation(translation)
-                    .status(object::BodyStatus::Static),
-            );
-            physics.build_collider(
-                ColliderDesc::new(shape)
-                    .sensor(!is_solid)
-                    .user_data(tile.info.id),
-                body_handle,
-                false,
-            );
-        }
+        // if WALL_TILE_TYPES.contains(&tile.type_) {
+        //     physics.build_collider(
+        //         ColliderDesc::new(shape).translation(translation),
+        //         physics.ground_handle,
+        //         false,
+        //     );
+        // } else {
+        //     let body_handle = physics.build_body(
+        //         RigidBodyDesc::new()
+        //             .translation(translation)
+        //             .status(object::BodyStatus::Static),
+        //     );
+        //     physics.build_collider(
+        //         ColliderDesc::new(shape)
+        //             .sensor(!is_solid)
+        //             .user_data(tile.info.id),
+        //         body_handle,
+        //         false,
+        //     );
+        // }
 
         let tile_spritesheet_width = (IMAGE_WIDTH / Tile::SIZE).floor() as Id;
         let (src_x, src_y) = (
@@ -279,10 +287,17 @@ impl TileInstance {
             .rotation(rotation)
             .dest(point_to_old((real_point.coords + offset.coords).into()));
 
-        TileInstance {
-            draw_param,
-            coords: coords.clone(),
-        }
+        (
+            TileInstance {
+                draw_param,
+                coords: coords.clone(),
+            },
+            if WALL_TILE_TYPES.contains(&tile.type_) {
+                Some((shape, translation))
+            } else {
+                None
+            },
+        )
     }
 }
 
@@ -298,26 +313,42 @@ impl Level {
         tiles: &HashMap<TileId, Tile>,
         physics: &mut Physics,
     ) -> Self {
-        let tile_instances: HashMap<TileInstanceId, TileInstance> = tilematrix
+        let (tile_instances, shapes): (
+            Vec<(TileInstanceId, TileInstance)>,
+            Vec<Option<(ncollide2d::shape::ShapeHandle<N>, Vector2<N>)>>,
+        ) = tilematrix
             .iter()
             .enumerate()
             .filter_map(|(i, tile_id)| {
                 let tile = Tilemap::get_tile_from_id(tiles, *tile_id);
                 if tile.type_ != TileType::None {
-                    Some((
-                        get_id(),
-                        TileInstance::new(
-                            physics,
-                            tuple_to_point(tilematrix.vector_to_matrix_index(i)),
-                            tile,
-                            *tile_id,
-                        ),
-                    ))
+                    let (tile, shape) = TileInstance::new(
+                        physics,
+                        tuple_to_point(tilematrix.vector_to_matrix_index(i)),
+                        tile,
+                        *tile_id,
+                    );
+                    Some(((get_id(), tile), shape))
                 } else {
                     None
                 }
             })
-            .collect();
+            .unzip();
+
+        let shape = ShapeHandle::new(ncollide2d::shape::Compound::new(
+            shapes
+                .into_iter()
+                .filter_map(|c| {
+                    c.map(|(shape, translation)| {
+                        (Isometry2::translation(translation.x, translation.y), shape)
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ));
+
+        physics.build_collider(ColliderDesc::new(shape), physics.ground_handle, false);
+
+        let tile_instances: HashMap<TileId, TileInstance> = tile_instances.into_iter().collect();
 
         Level {
             tiles: tile_instances,
@@ -515,7 +546,7 @@ impl Tilemap {
             tiles,
             level_info,
             current_level: Level::default(),
-            current_level_number: 0,
+            current_level_number: 1,
         }
     }
 
