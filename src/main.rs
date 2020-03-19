@@ -17,7 +17,6 @@ use nphysics2d::object::{
     RigidBodyDesc,
 };
 use nphysics2d::{material, object, world};
-use std::any::TypeId;
 use std::f32::consts::PI;
 use tiled::PropertyValue;
 
@@ -47,9 +46,19 @@ fn point_to_isometry<N: na::RealField + Copy + Scalar>(point: Point2<N>) -> Isom
 fn tuple_to_point<N: Scalar>((x, y): (N, N)) -> Point2<N> {
     Point2::new(x, y)
 }
+fn point_to_tuple<N: Copy + Scalar>(point: Point2<N>) -> (N, N) {
+    (point.x, point.y)
+}
 
 fn point_to_vector<N: Copy + Scalar>(point: Point2<N>) -> Vector2<N> {
     Vector2::new(point.x, point.y)
+}
+
+fn add<N: std::ops::Add<Output = N> + Copy + Scalar>(
+    point1: Point2<N>,
+    point2: Point2<N>,
+) -> Point2<N> {
+    Point2::new(point1.x + point2.x, point1.y + point2.y)
 }
 
 type Id = u32;
@@ -59,7 +68,16 @@ fn get_id() -> Id {
     COUNTER.fetch_add(1, atomic::Ordering::Relaxed) as Id
 }
 
-fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
+fn create_directions(coords: Point2<TileN>) -> Vec<Option<Point2<TileN>>> {
+    vec![
+        coords.x.checked_sub(1).map(|x| Point2::new(x, coords.y)),
+        coords.y.checked_sub(1).map(|y| Point2::new(coords.x, y)),
+        Some(Point2::new(coords.x + 1, coords.y)),
+        Some(Point2::new(coords.x, coords.y + 1)),
+    ]
+}
+
+fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) -> GameResult {
     let circle = graphics::Mesh::new_circle(
         ctx,
         graphics::DrawMode::Fill(graphics::FillOptions::DEFAULT),
@@ -67,9 +85,19 @@ fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) {
         1.,
         0.,
         color,
-    )
-    .unwrap();
-    graphics::draw(ctx, &circle, DrawParam::new());
+    )?;
+    graphics::draw(ctx, &circle, DrawParam::new())?;
+    Ok(())
+}
+fn draw_rect(ctx: &mut Context, rect: Rect, color: graphics::Color) -> GameResult {
+    let circle = graphics::Mesh::new_rectangle(
+        ctx,
+        graphics::DrawMode::Stroke(graphics::StrokeOptions::DEFAULT),
+        rect,
+        color,
+    )?;
+    graphics::draw(ctx, &circle, DrawParam::new())?;
+    Ok(())
 }
 
 struct Player {
@@ -165,7 +193,7 @@ struct Tile {
     info: tiled::Tile,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 enum TileType {
     Entrance,
     Exit,
@@ -186,6 +214,9 @@ impl Tile {
 }
 
 struct TileInstance {
+    id: TileInstanceId,
+    tile: TileId,
+    direction: Direction,
     draw_param: DrawParam,
     coords: Point2<usize>,
 }
@@ -280,7 +311,10 @@ impl TileInstance {
             .dest(point_to_old((real_point.coords + offset.coords).into()));
 
         TileInstance {
+            id: strip_transformations(tile_id),
+            tile: tile.info.id,
             draw_param,
+            direction,
             coords: coords.clone(),
         }
     }
@@ -319,9 +353,14 @@ impl Level {
             })
             .collect();
 
+        let guns = Self::get_all_tiles_of_type(tiles, &tile_instances, TileType::Gun)
+            .iter()
+            .map(|tile| tile.id)
+            .collect();
+
         Level {
             tiles: tile_instances,
-            guns: Vec::new(),
+            guns,
         }
     }
 
@@ -330,6 +369,17 @@ impl Level {
             tiles: HashMap::new(),
             guns: Vec::new(),
         }
+    }
+
+    pub fn get_all_tiles_of_type<'a>(
+        tiles: &HashMap<TileId, Tile>,
+        tile_instances: &'a HashMap<TileInstanceId, TileInstance>,
+        type_: TileType,
+    ) -> Vec<&'a TileInstance> {
+        tile_instances
+            .values()
+            .filter(|tile| Tilemap::get_tile_from_id(tiles, tile.tile).type_ == type_)
+            .collect()
     }
 }
 
@@ -557,24 +607,7 @@ impl Tilemap {
         coords: Point2<usize>,
         wallpaper: &mut Vec<Point2<usize>>,
     ) {
-        for new_coords in &[
-            Point2::new(coords.x, coords.y + 1),
-            Point2::new(
-                coords.x,
-                coords
-                    .y
-                    .checked_sub(1)
-                    .expect("Wallpaper machine has gone offscreen."),
-            ),
-            Point2::new(coords.x + 1, coords.y),
-            Point2::new(
-                coords
-                    .x
-                    .checked_sub(1)
-                    .expect("Wallpaper machine has gone offscreen."),
-                coords.y,
-            ),
-        ] {
+        for new_coords in create_directions(coords).iter().flatten() {
             let tile_type = &Self::get_tile_from_id(
                 tiles,
                 *tilematrix
@@ -587,7 +620,7 @@ impl Tilemap {
                 // Still place a wallpaper behind all non-Wall wall blocks, since some of them
                 // have open spaces that the wallpaper can shine through
                 if !WALL_TILE_TYPES.contains(tile_type) {
-                    Tilemap::build_wallpaper(tilematrix, tiles, *new_coords, wallpaper);
+                    Tilemap::build_wallpaper(tilematrix, tiles, new_coords.clone(), wallpaper);
                 }
             }
         }
@@ -785,6 +818,23 @@ impl Physics {
             .build(object::BodyPartHandle(body_handle, 0));
         self.collider_set.insert(collider)
     }
+
+    pub fn draw_colliders(&self, ctx: &mut Context) -> GameResult {
+        for (_, collider) in self.collider_set.iter() {
+            let shape = collider.shape().aabb(collider.position());
+            draw_rect(
+                ctx,
+                Rect::new(
+                    shape.mins().x,
+                    shape.mins().y,
+                    shape.extents().x,
+                    shape.extents().y,
+                ),
+                graphics::BLACK,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 struct MyGame {
@@ -878,6 +928,7 @@ impl EventHandler for MyGame {
         println!("FPS: {}", ggez::timer::fps(ctx));
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         self.tilemap.draw(ctx, &self.tilesheet_image)?;
+
         self.player
             .draw(ctx, &self.physics, &self.spritesheet_image)?;
         graphics::present(ctx)
