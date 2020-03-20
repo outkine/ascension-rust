@@ -199,7 +199,7 @@ impl Entity {
 #[derive(Debug)]
 struct Player {
     entity: Entity,
-    on_ground: bool,
+    has_jumped: bool,
 }
 
 impl Player {
@@ -222,7 +222,7 @@ impl Player {
         );
         Self {
             entity,
-            on_ground: true,
+            has_jumped: false,
         }
     }
 
@@ -249,7 +249,7 @@ impl Player {
             add(new_velocity, movement_vector * Self::MOVEMENT_POWER),
         );
 
-        self.on_ground = false;
+        let mut on_ground = false;
         for (user_datas, manifold) in physics.collisions(self.entity.collider_handle) {
             match user_datas {
                 (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
@@ -258,7 +258,7 @@ impl Player {
                     }
                     other @ ObjectType::Platform(_) | other @ ObjectType::Tile(_, _) => {
                         if physics.on_ground(&manifold) {
-                            self.on_ground = true;
+                            on_ground = true;
                         }
 
                         match other {
@@ -280,14 +280,18 @@ impl Player {
                                     _ => (),
                                 }
                             }
-                            ObjectType::Platform(railId) => {
-                                if self.on_ground {
-                                    let velocity = self.entity.velocity(physics);
-                                    let platform_velocity = tilemap.current_level.rails[&railId]
+                            ObjectType::Platform(rail_id) => {
+                                if on_ground {
+                                    let platform_velocity = tilemap.current_level.rails[&rail_id]
                                         .platform
                                         .velocity(physics);
-                                    self.entity
-                                        .set_velocity(physics, add(velocity, platform_velocity));
+
+                                    let mut new_velocity = self.entity.velocity(physics);
+                                    new_velocity[physics.gravity_dir.axis()] = 0.;
+                                    new_velocity[physics.gravity_dir.opposite_axis()] =
+                                        platform_velocity[physics.gravity_dir.opposite_axis()];
+
+                                    self.entity.set_velocity(physics, new_velocity);
                                 }
                             }
                             _ => (),
@@ -299,7 +303,10 @@ impl Player {
             }
         }
 
-        if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
+        // has_jumped ensures that player can jump in the very beginning, when
+        // no collisions have been registered yet
+        if (on_ground || !self.has_jumped) && keyboard::is_key_pressed(ctx, KeyCode::Up) {
+            self.has_jumped = true;
             let jump_vector = physics.gravity_dir.to_vector() * -Player::JUMP_POWER;
             self.entity.rigid_body_mut(physics).apply_force(
                 0,
