@@ -387,9 +387,10 @@ impl TileInstance {
     }
 }
 
+type BulletId = Id;
 #[derive(Debug)]
 struct GunTile {
-    bullets: Vec<Entity>,
+    bullets: HashMap<BulletId, Entity>,
 }
 
 impl GunTile {
@@ -400,7 +401,7 @@ impl GunTile {
 
     pub fn new() -> Self {
         Self {
-            bullets: Vec::new(),
+            bullets: HashMap::new(),
         }
     }
 
@@ -409,8 +410,9 @@ impl GunTile {
         physics: &mut Physics,
         pos: Point2<TileN>,
         dir: Direction,
-        id: TileInstanceId,
+        tile_instance_id: TileInstanceId,
     ) {
+        let bullet_id = get_id();
         let entity = Entity::new(
             physics,
             tuple_to_point(Self::BULLET_SPRITE_POS),
@@ -421,19 +423,19 @@ impl GunTile {
                 .gravity_enabled(false)
                 .velocity(point_to_velocity(dir.to_point() * Self::BULLET_SPEED)),
             false,
-            ObjectType::Bullet(id),
+            ObjectType::Bullet(tile_instance_id, bullet_id),
             false,
         );
-        self.bullets.push(entity);
+        self.bullets.insert(bullet_id, entity);
     }
 
-    pub fn remove_bullet(&mut self, physics: &mut Physics) {
-        let bullet = self.bullets.remove(0);
+    pub fn remove_bullet(&mut self, physics: &mut Physics, bullet_id: BulletId) {
+        let bullet = self.bullets.remove(&bullet_id).unwrap();
         physics.body_set.remove(bullet.body_handle);
     }
 
     pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) -> GameResult {
-        for bullet in &self.bullets {
+        for bullet in self.bullets.values() {
             bullet.draw(ctx, physics, spritesheet);
         }
 
@@ -745,7 +747,7 @@ struct Tilemap {
 enum ObjectType {
     Player,
     Platform,
-    Bullet(TileInstanceId),
+    Bullet(TileInstanceId, BulletId),
     Tile(TileInstanceId),
 }
 
@@ -933,7 +935,8 @@ impl Tilemap {
         wallpaper: &mut Vec<Point2<usize>>,
     ) {
         for new_coords in Direction::create_adjascent(coords).iter().flatten() {
-            let tile_type = Self::get_tile_from_matrix(tilematrix, tiles, new_coords.clone()).type_;
+            let tile_type =
+                Self::get_tile_from_matrix(tilematrix, tiles, (*new_coords).clone()).type_;
             if !wallpaper.contains(new_coords) && tile_type != TileType::Wall {
                 wallpaper.push(new_coords.clone());
                 // Still place a wallpaper behind all non-Wall wall blocks, since some of them
@@ -1214,7 +1217,7 @@ impl EventHandler for MyGame {
 
                 match user_datas {
                     (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
-                        ObjectType::Bullet(_) => self.player.reset(
+                        ObjectType::Bullet(_, _) => self.player.reset(
                             &mut self.physics,
                             self.tilemap.current_level_info().entrance.clone(),
                         ),
@@ -1227,7 +1230,8 @@ impl EventHandler for MyGame {
                             }
                         }
                     },
-                    (ObjectType::Bullet(gun_id), _) | (_, ObjectType::Bullet(gun_id)) => {
+                    (ObjectType::Bullet(gun_id, bullet_id), _)
+                    | (_, ObjectType::Bullet(gun_id, bullet_id)) => {
                         if let Some(TileData::GunData(ref mut gun_tile)) = &mut self
                             .tilemap
                             .current_level
@@ -1235,7 +1239,7 @@ impl EventHandler for MyGame {
                             .get_mut(&gun_id)
                             .map(|tile| &mut tile.extra_data)
                         {
-                            gun_tile.remove_bullet(&mut self.physics);
+                            gun_tile.remove_bullet(&mut self.physics, bullet_id);
                         } else {
                             panic!("user_data points to nonexistent gun.")
                         }
