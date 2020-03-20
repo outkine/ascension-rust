@@ -1,6 +1,4 @@
-
-
-name: Rust
+name: publish
 
 on:
   push:
@@ -8,15 +6,38 @@ on:
 
 jobs:
   build:
-    runs-on: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        include:
+        - os: macos-latest
+          CHANNEL: osx
+        - os: ubuntu-latest
+          CHANNEL: linux
+        - os: windows-latest
+          CHANNEL: windows
     steps:
     - uses: actions/checkout@v2
     - name: Build
       run: cargo build --release
-    - name: Copy Resources
-      run: cp resources/tilemap.png \
-              resources/spritesheet.png \
-              resources/tilemap.tmx \
-              target/release/resources
+    - name: Zip Windows
+      if: matrix.os == 'windows-latest'
+      run: zip game.zip target/release/game.exe \
+        resources/tilemap.png \
+        resources/spritesheet.png \
+        resources/tilemap.tmx
+    - name: Zip MacOS/Linux
+      if: matrix.os == 'macos-latest' || matrix.os == 'ubuntu-latest'
+      run: zip game.zip target/release/game \
+        resources/tilemap.png \
+        resources/spritesheet.png \
+        resources/tilemap.tmx
     - name: Butler Push
       uses: josephbmanley/butler-publish-itchio-action@v1.0.1
+      env:
+        BUTLER_CREDENTIALS: ${{ secrets.BUTLER_CREDENTIALS }}
+        CHANNEL: ${{matrix.TARGET}}
+        ITCH_GAME: ascension-2
+        ITCH_USER: outkine
+        PACKAGE: game.zip
