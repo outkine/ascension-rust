@@ -1045,14 +1045,18 @@ impl MyGame {
 impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         while ggez::timer::check_update_time(ctx, 60) {
-            self.physics.step();
-            self.tilemap.update(&mut self.physics);
             self.player.update(ctx, &mut self.physics);
+            self.tilemap.update(&mut self.physics);
+
+            let retrieve_user_datas = |physics: &mut Physics, coll1_handle, coll2_handle| {
+                (
+                    retrieve_user_data(physics.collider(coll1_handle)),
+                    retrieve_user_data(physics.collider(coll2_handle)),
+                )
+            };
+
             for (coll1_handle, coll2_handle, manifold) in self.physics.collision_events() {
-                let user_datas = (
-                    retrieve_user_data(self.physics.collider(coll1_handle)),
-                    retrieve_user_data(self.physics.collider(coll2_handle)),
-                );
+                let user_datas = retrieve_user_datas(&mut self.physics, coll1_handle, coll2_handle);
                 println!("Collision: {:?}", user_datas);
 
                 match user_datas {
@@ -1088,11 +1092,7 @@ impl EventHandler for MyGame {
             }
 
             for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
-                let user_datas = (
-                    retrieve_user_data(self.physics.collider(coll1_handle)),
-                    retrieve_user_data(self.physics.collider(coll2_handle)),
-                );
-
+                let user_datas = retrieve_user_datas(&mut self.physics, coll1_handle, coll2_handle);
                 println!("Proximity: {:?}", user_datas);
 
                 match user_datas {
@@ -1121,6 +1121,8 @@ impl EventHandler for MyGame {
                     _ => (),
                 }
             }
+
+            self.physics.step();
         }
         Ok(())
     }
