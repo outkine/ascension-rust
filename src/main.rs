@@ -1394,10 +1394,14 @@ impl EventHandler for MyGame {
                             let collided_tile =
                                 Tilemap::get_tile_from_tile_id(&self.tilemap.tiles, tile_id);
                             match collided_tile.type_ {
-                                TileType::Spikes => self.player.reset(
-                                    &mut self.physics,
-                                    self.tilemap.current_level_info().entrance.clone(),
-                                ),
+                                TileType::Spikes => {
+                                    self.player.reset(
+                                        &mut self.physics,
+                                        self.tilemap.current_level_info().entrance.clone(),
+                                    );
+                                    self.physics
+                                        .set_gravity_dir(Direction::South, &mut self.player);
+                                }
                                 TileType::Exit => {
                                     self.physics = Physics::new();
                                     self.tilemap.init_next_level(&mut self.physics, true);
