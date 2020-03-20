@@ -1015,14 +1015,6 @@ struct MyGame {
 
 impl MyGame {
     pub fn new(ctx: &mut Context) -> MyGame {
-        graphics::set_transform(
-            ctx,
-            DrawParam::new()
-                .scale(vector_to_old(Vector2::new(2., 2.)))
-                .dest(point_to_old(Point2::new(10., 10.)))
-                .to_matrix(),
-        );
-        graphics::apply_transformations(ctx);
         graphics::set_default_filter(ctx, graphics::FilterMode::Nearest);
 
         let mut tilemap = {
@@ -1134,6 +1126,18 @@ impl EventHandler for MyGame {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        graphics::set_transform(
+            ctx,
+            DrawParam::new()
+                .scale(vector_to_old(Vector2::new(SCALE, SCALE)))
+                .dest(point_to_old(add(
+                    -self.player.entity.position(&self.physics) * SCALE,
+                    Point2::new(WINDOW_SIZE / 2., WINDOW_SIZE / 2.),
+                )))
+                .to_matrix(),
+        );
+        graphics::apply_transformations(ctx)?;
+
         println!("FPS: {}", ggez::timer::fps(ctx));
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         self.tilemap.draw(
@@ -1150,6 +1154,9 @@ impl EventHandler for MyGame {
     }
 }
 
+const SCALE: N = 2.;
+const WINDOW_SIZE: N = 300.;
+
 fn main() {
     let resource_dir = std::path::PathBuf::from("./assets");
 
@@ -1160,7 +1167,7 @@ fn main() {
                 .title("Ascension")
                 .samples(ggez::conf::NumSamples::Zero),
         )
-        .window_mode(ggez::conf::WindowMode::default().dimensions(300., 300.))
+        .window_mode(ggez::conf::WindowMode::default().dimensions(WINDOW_SIZE, WINDOW_SIZE))
         .build()
         .expect("Could not create lgez context.");
 
