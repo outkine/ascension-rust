@@ -232,17 +232,6 @@ impl Player {
     }
 
     pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics, tilemap: &Tilemap) {
-        if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
-            self.on_ground = false;
-            let jump_vector = physics.gravity_dir.to_vector() * -Player::JUMP_POWER;
-            self.entity.rigid_body_mut(physics).apply_force(
-                0,
-                &Force2::linear(jump_vector),
-                ForceType::VelocityChange,
-                true,
-            );
-        }
-
         let movement_dir = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
             -1.
         } else if keyboard::is_key_pressed(ctx, KeyCode::Right) {
@@ -260,20 +249,64 @@ impl Player {
             add(new_velocity, movement_vector * Self::MOVEMENT_POWER),
         );
 
+        self.on_ground = false;
         for (user_datas, manifold) in physics.collisions(self.entity.collider_handle) {
             match user_datas {
-                (_, ObjectType::Platform(railId)) | (ObjectType::Platform(railId), _) => {
-                    if physics.on_ground(&manifold) {
-                        let velocity = self.entity.velocity(physics);
-                        let platform_velocity = tilemap.current_level.rails[&railId]
-                            .platform
-                            .velocity(physics);
-                        self.entity
-                            .set_velocity(physics, add(velocity, platform_velocity));
+                (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
+                    ObjectType::Bullet(_, _) => {
+                        self.reset(physics, tilemap.current_level_info().entrance.clone());
                     }
-                }
+                    other @ ObjectType::Platform(_) | other @ ObjectType::Tile(_, _) => {
+                        if physics.on_ground(&manifold) {
+                            self.on_ground = true;
+                        }
+
+                        match other {
+                            ObjectType::Tile(tile_id, tile_instance_id) => {
+                                let collided_tile_instance =
+                                    &tilemap.current_level.tiles[&tile_instance_id];
+                                let collided_tile = Tilemap::get_tile_from_tile_id(
+                                    &tilemap.tiles,
+                                    collided_tile_instance.tile_id,
+                                );
+                                match collided_tile.type_ {
+                                    TileType::Gravity => {
+                                        let gravity_dir =
+                                            collided_tile_instance.direction.opposite();
+                                        if gravity_dir != physics.gravity_dir {
+                                            physics.set_gravity_dir(gravity_dir, self);
+                                        }
+                                    }
+                                    _ => (),
+                                }
+                            }
+                            ObjectType::Platform(railId) => {
+                                if self.on_ground {
+                                    let velocity = self.entity.velocity(physics);
+                                    let platform_velocity = tilemap.current_level.rails[&railId]
+                                        .platform
+                                        .velocity(physics);
+                                    self.entity
+                                        .set_velocity(physics, add(velocity, platform_velocity));
+                                }
+                            }
+                            _ => (),
+                        }
+                    }
+                    ObjectType::Player => (),
+                },
                 _ => (),
             }
+        }
+
+        if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
+            let jump_vector = physics.gravity_dir.to_vector() * -Player::JUMP_POWER;
+            self.entity.rigid_body_mut(physics).apply_force(
+                0,
+                &Force2::linear(jump_vector),
+                ForceType::VelocityChange,
+                true,
+            );
         }
     }
 }
@@ -1263,9 +1296,14 @@ impl Physics {
         Ok(())
     }
 
-    pub fn set_gravity_dir(&mut self, dir: Direction) {
+    pub fn set_gravity_dir(&mut self, dir: Direction, player: &mut Player) {
         self.gravity_dir = dir;
         self.mechanical_world.gravity = dir.to_vector() * Self::GRAVITY;
+        // clearing the velocity is necessary to prevent weird small-jump bug
+        player
+            .entity
+            .rigid_body_mut(self)
+            .set_velocity(Velocity2::linear(0., 0.));
     }
 
     pub fn on_ground(&self, manifold: &ncollide2d::query::ContactManifold<N>) -> bool {
@@ -1325,44 +1363,10 @@ impl EventHandler for MyGame {
             self.player.update(ctx, &mut self.physics, &self.tilemap);
             self.tilemap.update(&mut self.physics);
 
-            for (user_datas, manifold) in self.physics.collision_events() {
-                println!("Collision: {:?}", user_datas);
+            for (user_datas, _) in self.physics.collision_events() {
+                // println!("Collision: {:?}", user_datas);
 
                 match user_datas {
-                    (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
-                        ObjectType::Bullet(_, _) => self.player.reset(
-                            &mut self.physics,
-                            self.tilemap.current_level_info().entrance.clone(),
-                        ),
-                        other @ ObjectType::Platform(_) | other @ ObjectType::Tile(_, _) => {
-                            if self.physics.on_ground(&manifold) {
-                                self.player.on_ground = true;
-                            }
-
-                            match other {
-                                ObjectType::Tile(tile_id, tile_instance_id) => {
-                                    let collided_tile_instance =
-                                        &self.tilemap.current_level.tiles[&tile_instance_id];
-                                    let collided_tile = Tilemap::get_tile_from_tile_id(
-                                        &self.tilemap.tiles,
-                                        collided_tile_instance.tile_id,
-                                    );
-                                    match collided_tile.type_ {
-                                        TileType::Gravity => {
-                                            let gravity_dir =
-                                                collided_tile_instance.direction.opposite();
-                                            if gravity_dir != self.physics.gravity_dir {
-                                                self.physics.set_gravity_dir(gravity_dir);
-                                            }
-                                        }
-                                        _ => (),
-                                    }
-                                }
-                                _ => (),
-                            }
-                        }
-                        _ => (),
-                    },
                     (ObjectType::Bullet(gun_id, bullet_id), _)
                     | (_, ObjectType::Bullet(gun_id, bullet_id)) => {
                         if let Some(TileData::GunData(ref mut gun_tile)) = &mut self
@@ -1382,7 +1386,7 @@ impl EventHandler for MyGame {
             }
 
             for (user_datas, _) in self.physics.proximity_events() {
-                println!("Proximity: {:?}", user_datas);
+                // println!("Proximity: {:?}", user_datas);
 
                 match user_datas {
                     (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
