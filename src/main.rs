@@ -1070,6 +1070,8 @@ impl Tilemap {
             self.current_level_number += 1;
         }
 
+        physics.ticks = 0;
+
         match self.level_info.get(self.current_level_number) {
             Some(level_info) => {
                 self.current_level = Level::new(&level_info.tilematrix, &self.tiles, physics);
@@ -1168,7 +1170,6 @@ impl Physics {
             &mut self.joint_constraint_set,
             &mut self.force_generator_set,
         );
-        self.ticks += 1;
     }
 
     pub fn rigid_body(&self, handle: DefaultBodyHandle) -> &RigidBody<N> {
@@ -1409,6 +1410,9 @@ impl EventHandler for MyGame {
                                         &mut self.physics,
                                         self.tilemap.current_level_info().entrance.clone(),
                                     );
+                                    self.physics.step();
+                                    // return to prevent incrementing physics.ticks
+                                    return Ok(());
                                 }
                                 _ => (),
                             }
@@ -1420,6 +1424,7 @@ impl EventHandler for MyGame {
             }
 
             self.physics.step();
+            self.physics.ticks += 1;
         }
         Ok(())
     }
