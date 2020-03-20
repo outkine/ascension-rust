@@ -185,6 +185,15 @@ impl Entity {
         self.rigid_body_mut(physics)
             .set_position(point_to_isometry(point));
     }
+
+    pub fn velocity(&self, physics: &Physics) -> Point2<N> {
+        self.rigid_body(physics).velocity().linear.into()
+    }
+
+    pub fn set_velocity(&mut self, physics: &mut Physics, velocity: Point2<N>) {
+        self.rigid_body_mut(physics)
+            .set_linear_velocity(velocity.coords);
+    }
 }
 
 #[derive(Debug)]
@@ -222,11 +231,10 @@ impl Player {
             .set_position(physics, Tile::point_to_real(entrance));
     }
 
-    pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics) {
-        let rigid_body = self.entity.rigid_body_mut(physics);
+    pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics, tilemap: &Tilemap) {
         if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
             self.on_ground = false;
-            rigid_body.apply_force(
+            self.entity.rigid_body_mut(physics).apply_force(
                 0,
                 &Force2::linear(Vector2::new(0., -Player::Y_POWER)),
                 ForceType::VelocityChange,
@@ -241,10 +249,24 @@ impl Player {
         } else {
             0.
         };
-        rigid_body.set_linear_velocity(Vector2::new(
-            x_dir * Self::X_POWER,
-            rigid_body.velocity().linear[1],
-        ));
+        self.entity.set_velocity(
+            physics,
+            Point2::new(x_dir * Self::X_POWER, self.entity.velocity(physics).y),
+        );
+
+        for (user_datas, _) in physics.collisions(self.entity.collider_handle) {
+            match user_datas {
+                (_, ObjectType::Platform(railId)) | (ObjectType::Platform(railId), _) => {
+                    let velocity = self.entity.velocity(physics);
+                    let platform_velocity = tilemap.current_level.rails[&railId]
+                        .platform
+                        .velocity(physics);
+                    self.entity
+                        .set_velocity(physics, add(velocity, platform_velocity));
+                }
+                _ => (),
+            }
+        }
     }
 }
 
@@ -443,11 +465,12 @@ impl GunTile {
     }
 }
 
+type RailId = Id;
 type TileInstanceId = Id;
 #[derive(Debug, Default)]
 struct Level {
     tiles: HashMap<TileInstanceId, TileInstance>,
-    rails: Vec<Rail>,
+    rails: HashMap<RailId, Rail>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -488,7 +511,7 @@ impl Rail {
     const PLATFORM_SPRITE_POS: (N, N) = (14., 0.);
     const PLATFORM_SPEED: N = 20.;
 
-    pub fn new(physics: &mut Physics, rail: Vec<Point2<TileN>>) -> Self {
+    pub fn new(physics: &mut Physics, rail: Vec<Point2<TileN>>, rail_id: RailId) -> Self {
         let platform = Entity::new(
             physics,
             tuple_to_point(Self::PLATFORM_SPRITE_POS),
@@ -496,7 +519,7 @@ impl Rail {
             tuple_to_point(Self::PLATFORM_SIZE),
             RigidBodyDesc::new().status(BodyStatus::Kinematic),
             false,
-            ObjectType::Platform,
+            ObjectType::Platform(rail_id),
             false,
         );
         Self {
@@ -573,7 +596,10 @@ impl Level {
 
         let rails = rail_set
             .into_iter()
-            .map(|rail| Rail::new(physics, rail))
+            .map(|rail| {
+                let rail_id = get_id();
+                (rail_id, Rail::new(physics, rail, rail_id))
+            })
             .collect();
 
         Level {
@@ -624,7 +650,7 @@ impl Level {
             }
         }
 
-        for rail in self.rails.iter_mut() {
+        for rail in self.rails.values_mut() {
             rail.update(physics);
         }
     }
@@ -647,7 +673,7 @@ impl Level {
             }
         }
 
-        for rail in self.rails.iter() {
+        for rail in self.rails.values() {
             rail.draw(ctx, physics, spritesheet);
         }
 
@@ -746,7 +772,7 @@ struct Tilemap {
 #[derive(PartialEq, Debug, Clone, Copy)]
 enum ObjectType {
     Player,
-    Platform,
+    Platform(RailId),
     Bullet(TileInstanceId, BulletId),
     Tile(TileInstanceId),
 }
@@ -1070,22 +1096,38 @@ impl Physics {
             .expect("No collider found for handle.")
     }
 
+    pub fn retrieve_user_datas(
+        &self,
+        coll1_handle: DefaultColliderHandle,
+        coll2_handle: DefaultColliderHandle,
+    ) -> (ObjectType, ObjectType) {
+        (
+            retrieve_user_data(self.collider(coll1_handle)),
+            retrieve_user_data(self.collider(coll2_handle)),
+        )
+    }
+
     pub fn collisions(
         &self,
         handle: DefaultColliderHandle,
-    ) -> impl Iterator<Item = &ncollide2d::query::ContactManifold<N>> {
+    ) -> Vec<(
+        (ObjectType, ObjectType),
+        ncollide2d::query::ContactManifold<N>,
+    )> {
         self.geometrical_world
             .contacts_with(&self.collider_set, handle, true)
             .into_iter()
             .flatten()
-            .map(|(_, _, _, _, _, manifold)| manifold)
+            .map(|(handle1, _, handle2, _, _, manifold)| {
+                (self.retrieve_user_datas(handle1, handle2), manifold.clone())
+            })
+            .collect()
     }
 
     pub fn collision_events(
         &self,
     ) -> Vec<(
-        DefaultColliderHandle,
-        DefaultColliderHandle,
+        (ObjectType, ObjectType),
         ncollide2d::query::ContactManifold<N>,
     )> {
         self.geometrical_world
@@ -1095,7 +1137,12 @@ impl Physics {
                 ncollide2d::pipeline::narrow_phase::ContactEvent::Started(handle1, handle2) => self
                     .geometrical_world
                     .contact_pair(&self.collider_set, *handle1, *handle2, true)
-                    .map(|(_, _, _, _, _, manifold)| (*handle1, *handle2, manifold.clone())),
+                    .map(|(_, _, _, _, _, manifold)| {
+                        (
+                            self.retrieve_user_datas(*handle1, *handle2),
+                            manifold.clone(),
+                        )
+                    }),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -1104,18 +1151,13 @@ impl Physics {
 
     pub fn proximity_events(
         &self,
-    ) -> Vec<(
-        DefaultColliderHandle,
-        DefaultColliderHandle,
-        ncollide2d::query::Proximity,
-    )> {
+    ) -> Vec<((ObjectType, ObjectType), ncollide2d::query::Proximity)> {
         self.geometrical_world
             .proximity_events()
             .iter()
             .map(|proximity_event| {
                 (
-                    proximity_event.collider1,
-                    proximity_event.collider2,
+                    self.retrieve_user_datas(proximity_event.collider1, proximity_event.collider2),
                     proximity_event.new_status,
                 )
             })
@@ -1188,6 +1230,8 @@ impl MyGame {
 
         let player = Player::new(&mut physics, tilemap.current_level_info().entrance.clone());
 
+        physics.step();
+
         MyGame {
             player,
             tilemap,
@@ -1201,18 +1245,10 @@ impl MyGame {
 impl EventHandler for MyGame {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         while ggez::timer::check_update_time(ctx, 60) {
-            self.player.update(ctx, &mut self.physics);
+            self.player.update(ctx, &mut self.physics, &self.tilemap);
             self.tilemap.update(&mut self.physics);
 
-            let retrieve_user_datas = |physics: &mut Physics, coll1_handle, coll2_handle| {
-                (
-                    retrieve_user_data(physics.collider(coll1_handle)),
-                    retrieve_user_data(physics.collider(coll2_handle)),
-                )
-            };
-
-            for (coll1_handle, coll2_handle, manifold) in self.physics.collision_events() {
-                let user_datas = retrieve_user_datas(&mut self.physics, coll1_handle, coll2_handle);
+            for (user_datas, manifold) in self.physics.collision_events() {
                 println!("Collision: {:?}", user_datas);
 
                 match user_datas {
@@ -1248,8 +1284,7 @@ impl EventHandler for MyGame {
                 }
             }
 
-            for (coll1_handle, coll2_handle, _) in self.physics.proximity_events() {
-                let user_datas = retrieve_user_datas(&mut self.physics, coll1_handle, coll2_handle);
+            for (user_datas, _) in self.physics.proximity_events() {
                 println!("Proximity: {:?}", user_datas);
 
                 match user_datas {
