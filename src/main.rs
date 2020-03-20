@@ -9,6 +9,7 @@ use ggez::graphics::{DrawParam, Image, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
+use crate::ObjectType::Platform;
 use na::{DMatrix, DMatrixSlice, Isometry2, Point2, Scalar, Vector2};
 use ncollide2d::shape::{Cuboid, ShapeHandle};
 use nphysics2d::algebra::{Force2, ForceType, Velocity2};
@@ -64,6 +65,13 @@ fn add<N: std::ops::Add<Output = N> + Copy + Scalar>(
     Point2::new(point1.x + point2.x, point1.y + point2.y)
 }
 
+fn sub<N: std::ops::Sub<Output = N> + Copy + Scalar>(
+    point1: Point2<N>,
+    point2: Point2<N>,
+) -> Point2<N> {
+    Point2::new(point1.x - point2.x, point1.y - point2.y)
+}
+
 type Id = u32;
 fn get_id() -> Id {
     use std::sync::atomic;
@@ -93,6 +101,17 @@ fn draw_rect(ctx: &mut Context, rect: Rect, color: graphics::Color) -> GameResul
     )?;
     graphics::draw(ctx, &circle, DrawParam::new())?;
     Ok(())
+}
+
+fn parse_property(tile: &tiled::Tile, name: &str) -> bool {
+    *tile
+        .properties
+        .get(name)
+        .and_then(|val| match val {
+            PropertyValue::BoolValue(val) => Some(val),
+            _ => None,
+        })
+        .expect("Tile property not found.")
 }
 
 #[derive(Debug)]
@@ -242,12 +261,14 @@ enum TileType {
     Spikes,
     Wall,
     Gun,
+    Rail,
     None,
 }
 
 #[derive(Debug)]
 enum TileData {
     GunData(GunTile),
+    RailData(bool),
     None,
 }
 
@@ -276,15 +297,7 @@ impl TileInstance {
         let real_point = Tile::point_to_real(coords);
         let vector = point_to_vector(real_point);
 
-        let is_solid = *tile
-            .info
-            .properties
-            .get("is_solid")
-            .and_then(|val| match val {
-                PropertyValue::BoolValue(val) => Some(val),
-                _ => None,
-            })
-            .unwrap();
+        let is_solid = parse_property(&tile.info, "is_solid");
 
         let (shape, translation) = match &tile.info.objectgroup {
             Some(object_group) => {
@@ -359,6 +372,7 @@ impl TileInstance {
 
         let extra_data = match tile.type_ {
             TileType::Gun => TileData::GunData(GunTile::new()),
+            TileType::Rail => TileData::RailData(parse_property(&tile.info, "is_endpoint")),
             _ => TileData::None,
         };
 
@@ -428,9 +442,87 @@ impl GunTile {
 }
 
 type TileInstanceId = Id;
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Level {
     tiles: HashMap<TileInstanceId, TileInstance>,
+    rails: Vec<Rail>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    Forwards,
+    Backwards,
+}
+
+#[derive(Debug)]
+struct Rail {
+    rail: Vec<Point2<TileN>>,
+    platform: Entity,
+    phase: Phase,
+    rail_i: usize,
+}
+
+impl Iterator for Rail {
+    type Item = Point2<TileN>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.phase = if self.rail_i == 0 {
+            Phase::Forwards
+        } else if self.rail_i == self.rail.len() - 1 {
+            Phase::Backwards
+        } else {
+            self.phase
+        };
+        self.rail_i = match self.phase {
+            Phase::Forwards => self.rail_i + 1,
+            Phase::Backwards => self.rail_i.checked_sub(1).unwrap(),
+        };
+        Some(self.rail[self.rail_i].clone())
+    }
+}
+
+impl Rail {
+    const PLATFORM_SIZE: (N, N) = (10., 10.);
+    const PLATFORM_SPRITE_POS: (N, N) = (14., 0.);
+    const PLATFORM_SPEED: N = 20.;
+
+    pub fn new(physics: &mut Physics, rail: Vec<Point2<TileN>>) -> Self {
+        let platform = Entity::new(
+            physics,
+            tuple_to_point(Self::PLATFORM_SPRITE_POS),
+            Tile::point_to_real(rail[0].clone()),
+            tuple_to_point(Self::PLATFORM_SIZE),
+            RigidBodyDesc::new().status(BodyStatus::Kinematic),
+            false,
+            ObjectType::Platform,
+            false,
+        );
+        Self {
+            rail,
+            platform,
+            phase: Phase::Forwards,
+            rail_i: 0,
+        }
+    }
+
+    pub fn update(&mut self, physics: &mut Physics) {
+        let dest = self.rail[self.rail_i].clone();
+        let pos_diff = sub(self.platform.position(physics), Tile::point_to_real(dest));
+        let cutoff = Self::PLATFORM_SPEED / 100.;
+        if pos_diff.x.abs() < cutoff && pos_diff.y.abs() < cutoff {
+            let next_dest = self.next().unwrap();
+            self.platform.rigid_body_mut(physics).set_velocity(
+                Velocity2::linear(
+                    next_dest.x as N - dest.clone().x as N,
+                    next_dest.y as N - dest.clone().y as N,
+                ) * Self::PLATFORM_SPEED,
+            );
+        }
+    }
+
+    pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) {
+        self.platform.draw(ctx, physics, spritesheet);
+    }
 }
 
 impl Level {
@@ -443,7 +535,7 @@ impl Level {
             .iter()
             .enumerate()
             .filter_map(|(i, tile_id)| {
-                let tile = Tilemap::get_tile_from_id(tiles, *tile_id);
+                let tile = Tilemap::get_tile_from_tile_id(tiles, *tile_id);
                 if tile.type_ != TileType::None {
                     Some((
                         get_id(),
@@ -460,15 +552,51 @@ impl Level {
             })
             .collect();
 
+        let mut rail_set: Vec<Vec<Point2<TileN>>> = Vec::new();
+
+        for tile_instance in tile_instances.values() {
+            if let TileData::RailData(true) = tile_instance.extra_data {
+                if !rail_set
+                    .iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .contains(&&tile_instance.coords)
+                {
+                    let mut rail = Vec::new();
+                    Self::build_rail(tilematrix, tiles, &mut rail, tile_instance.coords.clone());
+                    rail_set.push(rail);
+                }
+            }
+        }
+
+        let rails = rail_set
+            .into_iter()
+            .map(|rail| Rail::new(physics, rail))
+            .collect();
+
         Level {
             tiles: tile_instances,
+            rails,
         }
     }
 
-    pub fn default() -> Self {
-        Self {
-            tiles: HashMap::new(),
-        }
+    fn build_rail(
+        tilematrix: &DMatrix<TileId>,
+        tiles: &HashMap<TileId, Tile>,
+        rail: &mut Vec<Point2<TileN>>,
+        coords: Point2<TileN>,
+    ) {
+        rail.push(coords.clone());
+
+        Direction::create_adjascent(coords)
+            .into_iter()
+            .flatten()
+            .find(|coords| {
+                !rail.contains(&coords)
+                    && Tilemap::get_tile_from_matrix(tilematrix, tiles, (*coords).clone()).type_
+                        == TileType::Rail
+            })
+            .map(|new_coords| Self::build_rail(tilematrix, tiles, rail, new_coords.clone()));
     }
 
     fn get_all_tiles_of_type<'a>(
@@ -478,7 +606,7 @@ impl Level {
     ) -> Vec<&'a TileInstance> {
         tile_instances
             .values()
-            .filter(|tile| Tilemap::get_tile_from_id(tiles, tile.tile_id).type_ == type_)
+            .filter(|tile| Tilemap::get_tile_from_tile_id(tiles, tile.tile_id).type_ == type_)
             .collect()
     }
 
@@ -492,6 +620,10 @@ impl Level {
                 }
                 _ => (),
             }
+        }
+
+        for rail in self.rails.iter_mut() {
+            rail.update(physics);
         }
     }
 
@@ -509,6 +641,10 @@ impl Level {
             }
 
             graphics::draw(ctx, tilesheet, tile.draw_param)?;
+        }
+
+        for rail in self.rails.iter() {
+            rail.draw(ctx, physics, spritesheet);
         }
 
         Ok(())
@@ -606,6 +742,7 @@ struct Tilemap {
 #[derive(PartialEq, Debug, Clone, Copy)]
 enum ObjectType {
     Player,
+    Platform,
     Bullet(TileInstanceId),
     Tile(TileInstanceId),
 }
@@ -636,6 +773,7 @@ impl Tilemap {
                         "Spikes" => Spikes,
                         "Wall" => Wall,
                         "Gun" => Gun,
+                        "Rail" => Rail,
                         tile_type => panic!("Unknown tile type: {}", tile_type),
                     }
                 });
@@ -694,11 +832,7 @@ impl Tilemap {
                 },
             );
 
-        let mut entrances = Self::find_tiles_from_matrix(
-            &tilematrix.slice((0, 0), tilematrix.shape()),
-            &tiles,
-            TileType::Entrance,
-        );
+        let mut entrances = Self::find_tiles_from_matrix(&tilematrix, &tiles, TileType::Entrance);
         entrances.sort_by_key(|i| i.x);
 
         let level_info = entrances
@@ -708,7 +842,11 @@ impl Tilemap {
 
                 // we calculate the level size by how far left and right the wallpaper stretches
                 let xs = &wallpaper.iter().map(|point| point.x).collect::<Vec<_>>();
-                let x_bounds = (xs.iter().min().unwrap() - 1, xs.iter().max().unwrap() + 2);
+                // prevent overflow caused by subtracting 1 from 0
+                let x_bounds = (
+                    xs.iter().min().unwrap().saturating_sub(1),
+                    xs.iter().max().unwrap() + 2,
+                );
 
                 let matrix_slice = tilematrix
                     .slice(
@@ -740,12 +878,26 @@ impl Tilemap {
         }
     }
 
-    pub fn get_tile_from_id(tiles: &HashMap<TileId, Tile>, id: TileId) -> &Tile {
+    pub fn get_tile_id_from_matrix(tilematrix: &DMatrix<TileId>, coords: Point2<TileN>) -> TileId {
+        *tilematrix
+            .get(point_to_tuple(coords))
+            .expect("Matrix tile id query out of bounds.")
+    }
+
+    pub fn get_tile_from_tile_id(tiles: &HashMap<TileId, Tile>, id: TileId) -> &Tile {
         &tiles[&strip_transformations(id)]
     }
 
+    pub fn get_tile_from_matrix<'a>(
+        tilematrix: &DMatrix<TileId>,
+        tiles: &'a HashMap<TileId, Tile>,
+        coords: Point2<TileN>,
+    ) -> &'a Tile {
+        Self::get_tile_from_tile_id(tiles, Self::get_tile_id_from_matrix(tilematrix, coords))
+    }
+
     fn find_tiles_from_matrix(
-        tilematrix: &DMatrixSlice<TileId>,
+        tilematrix: &DMatrix<TileId>,
         tiles: &HashMap<TileId, Tile>,
         tile_type: TileType,
     ) -> Vec<Point2<TileN>> {
@@ -753,7 +905,7 @@ impl Tilemap {
             .iter()
             .enumerate()
             .filter_map(|(i, id)| {
-                if Self::get_tile_from_id(tiles, *id).type_ == tile_type {
+                if Self::get_tile_from_tile_id(tiles, *id).type_ == tile_type {
                     Some(tuple_to_point(tilematrix.vector_to_matrix_index(i)))
                 } else {
                     None
@@ -779,18 +931,12 @@ impl Tilemap {
         wallpaper: &mut Vec<Point2<usize>>,
     ) {
         for new_coords in Direction::create_adjascent(coords).iter().flatten() {
-            let tile_type = &Self::get_tile_from_id(
-                tiles,
-                *tilematrix
-                    .get((new_coords.x, new_coords.y))
-                    .expect("Wallpaper machine has gone outside of bounds."),
-            )
-            .type_;
-            if !wallpaper.contains(new_coords) && *tile_type != TileType::Wall {
+            let tile_type = Self::get_tile_from_matrix(tilematrix, tiles, new_coords.clone()).type_;
+            if !wallpaper.contains(new_coords) && tile_type != TileType::Wall {
                 wallpaper.push(new_coords.clone());
                 // Still place a wallpaper behind all non-Wall wall blocks, since some of them
                 // have open spaces that the wallpaper can shine through
-                if !WALL_TILE_TYPES.contains(tile_type) {
+                if !WALL_TILE_TYPES.contains(&tile_type) {
                     Tilemap::build_wallpaper(tilematrix, tiles, new_coords.clone(), wallpaper);
                 }
             }
@@ -1104,7 +1250,7 @@ impl EventHandler for MyGame {
                     (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
                         ObjectType::Tile(tile_id) => {
                             let collided_tile =
-                                Tilemap::get_tile_from_id(&self.tilemap.tiles, tile_id);
+                                Tilemap::get_tile_from_tile_id(&self.tilemap.tiles, tile_id);
                             match collided_tile.type_ {
                                 TileType::Spikes => self.player.reset(
                                     &mut self.physics,
@@ -1153,7 +1299,7 @@ impl EventHandler for MyGame {
             &self.tilesheet_image,
             &self.spritesheet_image,
         )?;
-        self.physics.draw_colliders(ctx)?;
+        // self.physics.draw_colliders(ctx)?;
         self.player
             .entity
             .draw(ctx, &self.physics, &self.spritesheet_image)?;
