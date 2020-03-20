@@ -1465,18 +1465,18 @@ const SCALE: N = 2.;
 const WINDOW_SIZE: N = 300.;
 
 fn main() {
-    let resource_dir = std::path::PathBuf::from("./assets");
+    let mut cb = ContextBuilder::new("ascension-rust", "Anton")
+        .window_setup(ggez::conf::WindowSetup::default().title("Ascension"))
+        .window_mode(ggez::conf::WindowMode::default().dimensions(WINDOW_SIZE, WINDOW_SIZE));
 
-    let (mut ctx, mut event_loop) = ContextBuilder::new("ascension-rust", "Anton")
-        .add_resource_path(resource_dir)
-        .window_setup(
-            ggez::conf::WindowSetup::default()
-                .title("Ascension")
-                .samples(ggez::conf::NumSamples::Zero),
-        )
-        .window_mode(ggez::conf::WindowMode::default().dimensions(WINDOW_SIZE, WINDOW_SIZE))
-        .build()
-        .expect("Could not create lgez context.");
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let mut path = std::path::PathBuf::from(manifest_dir);
+        path.push("resources");
+        println!("Adding path {:?}", path);
+        cb = cb.add_resource_path(path);
+    }
+
+    let (mut ctx, mut event_loop) = cb.build().expect("Could not create lgez context.");
 
     let mut my_game = MyGame::new(&mut ctx);
 

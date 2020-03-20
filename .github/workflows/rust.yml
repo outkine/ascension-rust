@@ -10,34 +10,30 @@ jobs:
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
-        include:
-        - os: macos-latest
-          CHANNEL: osx
-        - os: ubuntu-latest
-          CHANNEL: linux
-        - os: windows-latest
-          CHANNEL: windows
     steps:
     - uses: actions/checkout@v2
+
+    - name: Install Dependencies
+      if: matrix.os == 'ubuntu-latest'
+      run: sudo apt install libasound2-dev libudev-dev pkg-config
     - name: Build
       run: cargo build --release
-    - name: Zip Windows
+
+    - name: Create Dist Folder Windows
       if: matrix.os == 'windows-latest'
-      run: zip game.zip target/release/game.exe \
-        resources/tilemap.png \
-        resources/spritesheet.png \
-        resources/tilemap.tmx
-    - name: Zip MacOS/Linux
+      run: |
+        mkdir dist/resources
+        cp -Path target/release/game.exe -Destination dist
+        cp -Path resources/tilesheet.png,resources/spritesheet.png,resources/tilemap.tmx -Destination dist/resources
+
+    - name: Create Dist Folder MacOS/Linux
       if: matrix.os == 'macos-latest' || matrix.os == 'ubuntu-latest'
-      run: zip game.zip target/release/game \
-        resources/tilemap.png \
-        resources/spritesheet.png \
-        resources/tilemap.tmx
-    - name: Butler Push
-      uses: josephbmanley/butler-publish-itchio-action@v1.0.1
-      env:
-        BUTLER_CREDENTIALS: ${{ secrets.BUTLER_CREDENTIALS }}
-        CHANNEL: ${{matrix.TARGET}}
-        ITCH_GAME: ascension-2
-        ITCH_USER: outkine
-        PACKAGE: game.zip
+      run: |
+        mkdir -p dist/resources
+        cp target/release/game dist
+        cp resources/tilesheet.png resources/spritesheet.png resources/tilemap.tmx dist/resources
+
+    - uses: actions/upload-artifact@v1
+      with:
+        name: ascension-2-${{ matrix.os }}
+        path: dist
