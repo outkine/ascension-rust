@@ -203,8 +203,8 @@ struct Player {
 }
 
 impl Player {
-    const X_POWER: N = 100.;
-    const Y_POWER: N = 200.;
+    const MOVEMENT_POWER: N = 100.;
+    const JUMP_POWER: N = 200.;
     const SIZE: (N, N) = (10., 10.);
     const SPRITE_POS: (N, N) = (0., 0.);
     const MASS: N = 10.;
@@ -234,24 +234,30 @@ impl Player {
     pub fn update(&mut self, ctx: &mut Context, physics: &mut Physics, tilemap: &Tilemap) {
         if self.on_ground && keyboard::is_key_pressed(ctx, KeyCode::Up) {
             self.on_ground = false;
+            let jump_vector = physics.gravity_dir.to_vector() * -Player::JUMP_POWER;
             self.entity.rigid_body_mut(physics).apply_force(
                 0,
-                &Force2::linear(Vector2::new(0., -Player::Y_POWER)),
+                &Force2::linear(jump_vector),
                 ForceType::VelocityChange,
                 true,
             );
         }
 
-        let x_dir = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
+        let movement_dir = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
             -1.
         } else if keyboard::is_key_pressed(ctx, KeyCode::Right) {
             1.
         } else {
             0.
         };
+
+        let mut new_velocity = self.entity.velocity(physics);
+        new_velocity[physics.gravity_dir.opposite_axis()] = 0.;
+        let movement_vector = physics.gravity_dir.inverse().to_point() * movement_dir;
+
         self.entity.set_velocity(
             physics,
-            Point2::new(x_dir * Self::X_POWER, self.entity.velocity(physics).y),
+            add(new_velocity, movement_vector * Self::MOVEMENT_POWER),
         );
 
         for (user_datas, _) in physics.collisions(self.entity.collider_handle) {
@@ -284,6 +290,7 @@ enum TileType {
     Wall,
     Gun,
     Rail,
+    Gravity,
     None,
 }
 
@@ -294,7 +301,7 @@ enum TileData {
     None,
 }
 
-const WALL_TILE_TYPES: &[TileType] = &[TileType::Wall, TileType::Gun];
+const WALL_TILE_TYPES: &[TileType] = &[TileType::Wall, TileType::Gun, TileType::Gravity];
 
 impl Tile {
     const SIZE: N = 10.;
@@ -315,7 +322,13 @@ struct TileInstance {
 }
 
 impl TileInstance {
-    pub fn new(physics: &mut Physics, coords: Point2<TileN>, tile: &Tile, tile_id: TileId) -> Self {
+    pub fn new(
+        physics: &mut Physics,
+        coords: Point2<TileN>,
+        tile: &Tile,
+        tile_id: TileId,
+        tile_instance_id: TileInstanceId,
+    ) -> Self {
         let real_point = Tile::point_to_real(coords);
         let vector = point_to_vector(real_point);
 
@@ -353,7 +366,7 @@ impl TileInstance {
             physics.build_collider(
                 ColliderDesc::new(shape)
                     .translation(translation)
-                    .user_data(ObjectType::Tile(tile.info.id)),
+                    .user_data(ObjectType::Tile(tile.info.id, tile_instance_id)),
                 physics.ground_handle,
                 false,
             );
@@ -366,7 +379,7 @@ impl TileInstance {
             physics.build_collider(
                 ColliderDesc::new(shape)
                     .sensor(!is_solid)
-                    .user_data(ObjectType::Tile(tile.info.id)),
+                    .user_data(ObjectType::Tile(tile.info.id, tile_instance_id)),
                 body_handle,
                 false,
             );
@@ -561,14 +574,16 @@ impl Level {
             .enumerate()
             .filter_map(|(i, tile_id)| {
                 let tile = Tilemap::get_tile_from_tile_id(tiles, *tile_id);
+                let tile_instance_id = get_id();
                 if tile.type_ != TileType::None {
                     Some((
-                        get_id(),
+                        tile_instance_id,
                         TileInstance::new(
                             physics,
                             tuple_to_point(tilematrix.vector_to_matrix_index(i)),
                             tile,
                             *tile_id,
+                            tile_instance_id,
                         ),
                     ))
                 } else {
@@ -750,6 +765,46 @@ impl Direction {
         }
     }
 
+    fn to_vector(self) -> Vector2<N> {
+        point_to_vector(self.to_point())
+    }
+
+    fn opposite(self) -> Self {
+        use Direction::*;
+        match self {
+            South => North,
+            East => West,
+            North => South,
+            West => East,
+        }
+    }
+
+    fn inverse(self) -> Self {
+        use Direction::*;
+        match self {
+            South => East,
+            East => North,
+            North => West,
+            West => South,
+        }
+    }
+
+    fn axis(self) -> usize {
+        use Direction::*;
+        match self {
+            East | West => 0,
+            North | South => 1,
+        }
+    }
+
+    fn opposite_axis(self) -> usize {
+        use Direction::*;
+        match self {
+            East | West => 1,
+            North | South => 0,
+        }
+    }
+
     fn create_adjascent(point: Point2<TileN>) -> Vec<Option<Point2<TileN>>> {
         vec![
             point.x.checked_sub(1).map(|x| Point2::new(x, point.y)),
@@ -774,7 +829,7 @@ enum ObjectType {
     Player,
     Platform(RailId),
     Bullet(TileInstanceId, BulletId),
-    Tile(TileInstanceId),
+    Tile(TileId, TileInstanceId),
 }
 
 fn retrieve_user_data(collider: &Collider<N, DefaultBodyHandle>) -> ObjectType {
@@ -804,6 +859,7 @@ impl Tilemap {
                         "Wall" => Wall,
                         "Gun" => Gun,
                         "Rail" => Rail,
+                        "Gravity" => Gravity,
                         tile_type => panic!("Unknown tile type: {}", tile_type),
                     }
                 });
@@ -1035,14 +1091,16 @@ struct Physics {
     force_generator_set: nphysics2d::force_generator::DefaultForceGeneratorSet<N>,
     ground_handle: DefaultBodyHandle,
     ticks: usize,
+    gravity_dir: Direction,
 }
 
 impl Physics {
-    const GRAVITY: f32 = 400.;
+    const GRAVITY: N = 400.;
 
     pub fn new() -> Self {
         let geometrical_world = world::DefaultGeometricalWorld::new();
-        let gravity = Vector2::y() * Self::GRAVITY;
+        let gravity_dir = Direction::South;
+        let gravity = gravity_dir.to_vector() * Self::GRAVITY;
         let mut mechanical_world = world::DefaultMechanicalWorld::new(gravity);
         mechanical_world
             .solver
@@ -1063,6 +1121,7 @@ impl Physics {
             joint_constraint_set,
             force_generator_set,
             ground_handle,
+            gravity_dir,
             ticks: 0,
         }
     }
@@ -1201,6 +1260,11 @@ impl Physics {
         }
         Ok(())
     }
+
+    pub fn set_gravity_dir(&mut self, dir: Direction) {
+        self.gravity_dir = dir;
+        self.mechanical_world.gravity = dir.to_vector() * Self::GRAVITY;
+    }
 }
 
 struct MyGame {
@@ -1257,14 +1321,46 @@ impl EventHandler for MyGame {
                             &mut self.physics,
                             self.tilemap.current_level_info().entrance.clone(),
                         ),
-                        _ => {
+                        other @ ObjectType::Platform(_) | other @ ObjectType::Tile(_, _) => {
                             if manifold.contacts().any(|contact| {
-                                contact.contact.normal.y.round() > 0.
-                                    && contact.contact.normal.x.round() == 0.
+                                let contact_normal_direction = match self.physics.gravity_dir {
+                                    Direction::South | Direction::East => 1.,
+                                    Direction::North | Direction::West => -1.,
+                                };
+                                contact.contact.normal[self.physics.gravity_dir.axis()].round()
+                                    * contact_normal_direction
+                                    > 0.
+                                    && contact.contact.normal
+                                        [self.physics.gravity_dir.opposite_axis()]
+                                    .round()
+                                        == 0.
                             }) {
                                 self.player.on_ground = true;
                             }
+
+                            match other {
+                                ObjectType::Tile(tile_id, tile_instance_id) => {
+                                    let collided_tile_instance =
+                                        &self.tilemap.current_level.tiles[&tile_instance_id];
+                                    let collided_tile = Tilemap::get_tile_from_tile_id(
+                                        &self.tilemap.tiles,
+                                        collided_tile_instance.tile_id,
+                                    );
+                                    match collided_tile.type_ {
+                                        TileType::Gravity => {
+                                            let gravity_dir =
+                                                collided_tile_instance.direction.opposite();
+                                            if gravity_dir != self.physics.gravity_dir {
+                                                self.physics.set_gravity_dir(gravity_dir);
+                                            }
+                                        }
+                                        _ => (),
+                                    }
+                                }
+                                _ => (),
+                            }
                         }
+                        _ => (),
                     },
                     (ObjectType::Bullet(gun_id, bullet_id), _)
                     | (_, ObjectType::Bullet(gun_id, bullet_id)) => {
@@ -1289,7 +1385,7 @@ impl EventHandler for MyGame {
 
                 match user_datas {
                     (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
-                        ObjectType::Tile(tile_id) => {
+                        ObjectType::Tile(tile_id, _) => {
                             let collided_tile =
                                 Tilemap::get_tile_from_tile_id(&self.tilemap.tiles, tile_id);
                             match collided_tile.type_ {
@@ -1332,7 +1428,7 @@ impl EventHandler for MyGame {
         );
         graphics::apply_transformations(ctx)?;
 
-        println!("FPS: {}", ggez::timer::fps(ctx));
+        // println!("FPS: {}", ggez::timer::fps(ctx));
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         self.tilemap.draw(
             ctx,
