@@ -11,9 +11,9 @@ use ggez::{graphics, Context, ContextBuilder, GameResult};
 
 use na::{DMatrix, Isometry2, Point2, Scalar, Vector2};
 use ncollide2d::shape::{Cuboid, ShapeHandle};
-use nphysics2d::algebra::{Force2, ForceType, Velocity2};
+use nphysics2d::algebra::Velocity2;
 use nphysics2d::object::{
-    Body, BodyStatus, Collider, ColliderDesc, DefaultBodyHandle, DefaultColliderHandle, RigidBody,
+    BodyStatus, Collider, ColliderDesc, DefaultBodyHandle, DefaultColliderHandle, RigidBody,
     RigidBodyDesc,
 };
 use nphysics2d::{material, object, world};
