@@ -1368,20 +1368,23 @@ impl EventHandler for MyGame {
                 // println!("Collision: {:?}", user_datas);
 
                 match user_datas {
-                    (ObjectType::Bullet(gun_id, bullet_id), _)
-                    | (_, ObjectType::Bullet(gun_id, bullet_id)) => {
-                        if let Some(TileData::GunData(ref mut gun_tile)) = &mut self
-                            .tilemap
-                            .current_level
-                            .tiles
-                            .get_mut(&gun_id)
-                            .map(|tile| &mut tile.extra_data)
-                        {
-                            gun_tile.remove_bullet(&mut self.physics, bullet_id);
-                        } else {
-                            panic!("user_data points to nonexistent gun.")
+                    (ObjectType::Bullet(gun_id, bullet_id), other)
+                    | (other, ObjectType::Bullet(gun_id, bullet_id)) => match other {
+                        ObjectType::Bullet(_, _) | ObjectType::Player => (),
+                        _ => {
+                            if let Some(TileData::GunData(ref mut gun_tile)) = &mut self
+                                .tilemap
+                                .current_level
+                                .tiles
+                                .get_mut(&gun_id)
+                                .map(|tile| &mut tile.extra_data)
+                            {
+                                gun_tile.remove_bullet(&mut self.physics, bullet_id);
+                            } else {
+                                panic!("user_data points to nonexistent gun.")
+                            }
                         }
-                    }
+                    },
                     _ => (),
                 }
             }
