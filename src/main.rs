@@ -477,7 +477,7 @@ impl GunTile {
     const SHOOTING_FREQUENCY: usize = 100;
     const BULLET_SIZE: (N, N) = (4., 4.);
     const BULLET_SPRITE_POS: (N, N) = (10., 0.);
-    const BULLET_SPEED: N = 20.;
+    const BULLET_SPEED: N = 40.;
 
     pub fn new() -> Self {
         Self {
