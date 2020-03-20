@@ -635,12 +635,14 @@ impl Level {
         spritesheet: &Image,
     ) -> GameResult {
         for tile in self.tiles.values() {
+            graphics::draw(ctx, tilesheet, tile.draw_param)?;
+        }
+        // draw bullets after all tiles
+        for tile in self.tiles.values() {
             match &tile.extra_data {
                 TileData::GunData(gun_tile) => gun_tile.draw(ctx, physics, spritesheet)?,
                 _ => (),
             }
-
-            graphics::draw(ctx, tilesheet, tile.draw_param)?;
         }
 
         for rail in self.rails.iter() {
