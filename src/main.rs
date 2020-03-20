@@ -83,6 +83,7 @@ fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) -> Ga
     graphics::draw(ctx, &circle, DrawParam::new())?;
     Ok(())
 }
+
 fn draw_rect(ctx: &mut Context, rect: Rect, color: graphics::Color) -> GameResult {
     let circle = graphics::Mesh::new_rectangle(
         ctx,
@@ -167,6 +168,7 @@ impl Entity {
     }
 }
 
+#[derive(Debug)]
 struct Player {
     entity: Entity,
     on_ground: bool,
@@ -426,6 +428,7 @@ impl GunTile {
 }
 
 type TileInstanceId = Id;
+#[derive(Debug)]
 struct Level {
     tiles: HashMap<TileInstanceId, TileInstance>,
 }
@@ -512,6 +515,7 @@ impl Level {
     }
 }
 
+#[derive(Debug)]
 struct LevelInfo {
     tilematrix: DMatrix<TileId>,
     wallpaper: Vec<Point2<TileN>>,
@@ -591,6 +595,7 @@ impl Direction {
 }
 
 type TileId = Id;
+#[derive(Debug)]
 struct Tilemap {
     tiles: HashMap<TileId, Tile>,
     level_info: Vec<LevelInfo>,
