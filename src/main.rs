@@ -9,8 +9,7 @@ use ggez::graphics::{DrawParam, Image, Rect};
 use ggez::input::keyboard;
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
-use crate::ObjectType::Platform;
-use na::{DMatrix, DMatrixSlice, Isometry2, Point2, Scalar, Vector2};
+use na::{DMatrix, Isometry2, Point2, Scalar, Vector2};
 use ncollide2d::shape::{Cuboid, ShapeHandle};
 use nphysics2d::algebra::{Force2, ForceType, Velocity2};
 use nphysics2d::object::{
@@ -79,6 +78,7 @@ fn get_id() -> Id {
     COUNTER.fetch_add(1, atomic::Ordering::Relaxed) as Id
 }
 
+#[allow(dead_code)]
 fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) -> GameResult {
     let circle = graphics::Mesh::new_circle(
         ctx,
@@ -92,6 +92,7 @@ fn draw_point(ctx: &mut Context, point: Point2<N>, color: graphics::Color) -> Ga
     Ok(())
 }
 
+#[allow(dead_code)]
 fn draw_rect(ctx: &mut Context, rect: Rect, color: graphics::Color) -> GameResult {
     let circle = graphics::Mesh::new_rectangle(
         ctx,
@@ -262,7 +263,7 @@ impl Player {
                         }
 
                         match other {
-                            ObjectType::Tile(tile_id, tile_instance_id) => {
+                            ObjectType::Tile(_, tile_instance_id) => {
                                 let collided_tile_instance =
                                     &tilemap.current_level.tiles[&tile_instance_id];
                                 let collided_tile = Tilemap::get_tile_from_tile_id(
@@ -513,7 +514,7 @@ impl GunTile {
 
     pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) -> GameResult {
         for bullet in self.bullets.values() {
-            bullet.draw(ctx, physics, spritesheet);
+            bullet.draw(ctx, physics, spritesheet)?;
         }
 
         Ok(())
@@ -600,8 +601,9 @@ impl Rail {
         }
     }
 
-    pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) {
-        self.platform.draw(ctx, physics, spritesheet);
+    pub fn draw(&self, ctx: &mut Context, physics: &Physics, spritesheet: &Image) -> GameResult {
+        self.platform.draw(ctx, physics, spritesheet)?;
+        Ok(())
     }
 }
 
@@ -684,17 +686,6 @@ impl Level {
             .map(|new_coords| Self::build_rail(tilematrix, tiles, rail, new_coords.clone()));
     }
 
-    fn get_all_tiles_of_type<'a>(
-        tiles: &HashMap<TileId, Tile>,
-        tile_instances: &'a HashMap<TileInstanceId, TileInstance>,
-        type_: TileType,
-    ) -> Vec<&'a TileInstance> {
-        tile_instances
-            .values()
-            .filter(|tile| Tilemap::get_tile_from_tile_id(tiles, tile.tile_id).type_ == type_)
-            .collect()
-    }
-
     pub fn update(&mut self, physics: &mut Physics) {
         for (instance_id, tile) in self.tiles.iter_mut() {
             match &mut tile.extra_data {
@@ -731,7 +722,7 @@ impl Level {
         }
 
         for rail in self.rails.values() {
-            rail.draw(ctx, physics, spritesheet);
+            rail.draw(ctx, physics, spritesheet)?;
         }
 
         Ok(())
@@ -1286,6 +1277,7 @@ impl Physics {
         self.collider_set.insert(collider)
     }
 
+    #[allow(dead_code)]
     pub fn draw_colliders(&self, ctx: &mut Context) -> GameResult {
         for (_, collider) in self.collider_set.iter() {
             let shape = collider.shape().aabb(collider.position());
