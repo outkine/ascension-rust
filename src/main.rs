@@ -260,15 +260,17 @@ impl Player {
             add(new_velocity, movement_vector * Self::MOVEMENT_POWER),
         );
 
-        for (user_datas, _) in physics.collisions(self.entity.collider_handle) {
+        for (user_datas, manifold) in physics.collisions(self.entity.collider_handle) {
             match user_datas {
                 (_, ObjectType::Platform(railId)) | (ObjectType::Platform(railId), _) => {
-                    let velocity = self.entity.velocity(physics);
-                    let platform_velocity = tilemap.current_level.rails[&railId]
-                        .platform
-                        .velocity(physics);
-                    self.entity
-                        .set_velocity(physics, add(velocity, platform_velocity));
+                    if physics.on_ground(&manifold) {
+                        let velocity = self.entity.velocity(physics);
+                        let platform_velocity = tilemap.current_level.rails[&railId]
+                            .platform
+                            .velocity(physics);
+                        self.entity
+                            .set_velocity(physics, add(velocity, platform_velocity));
+                    }
                 }
                 _ => (),
             }
@@ -1265,6 +1267,17 @@ impl Physics {
         self.gravity_dir = dir;
         self.mechanical_world.gravity = dir.to_vector() * Self::GRAVITY;
     }
+
+    pub fn on_ground(&self, manifold: &ncollide2d::query::ContactManifold<N>) -> bool {
+        manifold.contacts().any(|contact| {
+            let contact_normal_direction = match self.gravity_dir {
+                Direction::South | Direction::East => 1.,
+                Direction::North | Direction::West => -1.,
+            };
+            contact.contact.normal[self.gravity_dir.axis()].round() * contact_normal_direction > 0.
+                && contact.contact.normal[self.gravity_dir.opposite_axis()].round() == 0.
+        })
+    }
 }
 
 struct MyGame {
@@ -1322,19 +1335,7 @@ impl EventHandler for MyGame {
                             self.tilemap.current_level_info().entrance.clone(),
                         ),
                         other @ ObjectType::Platform(_) | other @ ObjectType::Tile(_, _) => {
-                            if manifold.contacts().any(|contact| {
-                                let contact_normal_direction = match self.physics.gravity_dir {
-                                    Direction::South | Direction::East => 1.,
-                                    Direction::North | Direction::West => -1.,
-                                };
-                                contact.contact.normal[self.physics.gravity_dir.axis()].round()
-                                    * contact_normal_direction
-                                    > 0.
-                                    && contact.contact.normal
-                                        [self.physics.gravity_dir.opposite_axis()]
-                                    .round()
-                                        == 0.
-                            }) {
+                            if self.physics.on_ground(&manifold) {
                                 self.player.on_ground = true;
                             }
 
