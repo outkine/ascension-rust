@@ -152,6 +152,10 @@ impl Entity {
         let collider_handle = physics.build_collider(
             ColliderDesc::new(shape)
                 .sensor(is_sensor)
+                // increasing linear_prediction from a default of 0.001 is necessary to prevent a bug
+                // where the engine doesn't detect the collision between the player and a
+                // downwards moving platform
+                .linear_prediction(0.01)
                 .user_data(user_data),
             body_handle,
             ccd_enabled,
@@ -283,16 +287,16 @@ impl Player {
                             }
                             ObjectType::Platform(rail_id) => {
                                 if on_ground {
-                                    let platform_velocity = tilemap.current_level.rails[&rail_id]
+                                    let mut platform_velocity = tilemap.current_level.rails
+                                        [&rail_id]
                                         .platform
                                         .velocity(physics);
 
-                                    let mut new_velocity = self.entity.velocity(physics);
-                                    new_velocity[physics.gravity_dir.axis()] = 0.;
-                                    new_velocity[physics.gravity_dir.opposite_axis()] =
-                                        platform_velocity[physics.gravity_dir.opposite_axis()];
+                                    let velocity = self.entity.velocity(physics);
+                                    platform_velocity[physics.gravity_dir.opposite_axis()] +=
+                                        velocity[physics.gravity_dir.opposite_axis()];
 
-                                    self.entity.set_velocity(physics, new_velocity);
+                                    self.entity.set_velocity(physics, platform_velocity);
                                 }
                             }
                             _ => (),
@@ -308,13 +312,11 @@ impl Player {
         // no collisions have been registered yet
         if (on_ground || !self.has_jumped) && keyboard::is_key_pressed(ctx, KeyCode::Up) {
             self.has_jumped = true;
-            let jump_vector = physics.gravity_dir.to_vector() * -Player::JUMP_POWER;
-            self.entity.rigid_body_mut(physics).apply_force(
-                0,
-                &Force2::linear(jump_vector),
-                ForceType::VelocityChange,
-                true,
-            );
+            let jump_vector = physics.gravity_dir.to_point() * -Self::JUMP_POWER;
+            let mut velocity = self.entity.velocity(physics);
+            velocity[physics.gravity_dir.axis()] = 0.;
+            self.entity
+                .set_velocity(physics, add(jump_vector, velocity));
         }
     }
 }
@@ -566,7 +568,6 @@ impl Rail {
     const PLATFORM_SIZE: (N, N) = (10., 10.);
     const PLATFORM_SPRITE_POS: (N, N) = (14., 0.);
     const PLATFORM_SPEED: N = 20.;
-
     pub fn new(physics: &mut Physics, rail: Vec<Point2<TileN>>, rail_id: RailId) -> Self {
         let platform = Entity::new(
             physics,
