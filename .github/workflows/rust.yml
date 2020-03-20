@@ -1,0 +1,22 @@
+
+
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --release
+    - name: Copy Resources
+      run: cp resources/tilemap.png \
+              resources/spritesheet.png \
+              resources/tilemap.tmx \
+              target/release/resources
+    - name: Butler Push
+      uses: josephbmanley/butler-publish-itchio-action@v1.0.1
