@@ -33,7 +33,7 @@ jobs:
         cp target/release/game dist
         cp resources/tilesheet.png resources/spritesheet.png resources/tilemap.tmx dist/resources
 
-    - uses: actions/upload-artifact@v1
+    - uses: actions/upload-artifact@v2-preview
       with:
         name: ascension-2-${{ matrix.os }}
         path: dist
