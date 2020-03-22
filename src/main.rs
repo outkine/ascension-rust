@@ -20,6 +20,9 @@ use nphysics2d::{material, object, world};
 use std::f32::consts::PI;
 use tiled::PropertyValue;
 
+use serde::{Deserialize, Serialize};
+use std::io::Read;
+
 type N = f32;
 type TileN = usize;
 
@@ -1192,23 +1195,24 @@ impl World {
         ctx: &Context,
         tiles: &HashMap<TileId, Tile>,
         level_infos: &Vec<LevelInfo>,
-    ) {
-        if self
-            .current_level
+    ) -> bool {
+        self.current_level
             .update(ctx, tiles, &level_infos[self.current_level_number])
-        {
-            self.init_next_level(tiles, level_infos)
-        }
     }
 
-    pub fn init_next_level(&mut self, tiles: &HashMap<TileId, Tile>, level_infos: &Vec<LevelInfo>) {
+    pub fn init_next_level(
+        &mut self,
+        tiles: &HashMap<TileId, Tile>,
+        level_infos: &Vec<LevelInfo>,
+    ) -> bool {
         self.current_level_number += 1;
 
         match level_infos.get(self.current_level_number) {
             Some(level_info) => {
                 self.current_level = Level::new(tiles, level_info);
+                false
             }
-            None => panic!("End of game!"),
+            None => true,
         }
     }
 
@@ -1389,12 +1393,14 @@ impl LevelInfo {
 
 struct LevelSelect {
     box_draw_param: DrawParam,
+    locked_box_draw_param: DrawParam,
     title_draw_param: DrawParam,
     boxes: Vec<Rect>,
 }
 
 impl LevelSelect {
     const BOX_SPRITE_POS: (N, N) = (0., 48.);
+    const LOCKED_BOX_SPRITE_POS: (N, N) = (10., 48.);
     const BOX_SPRITE_SIZE: (N, N) = (10., 10.);
     const BOX_MARGIN: N = 2.;
 
@@ -1431,6 +1437,11 @@ impl LevelSelect {
                 tuple_to_point(Self::BOX_SPRITE_SIZE),
                 1.,
             ),
+            locked_box_draw_param: create_sprite_draw_param(
+                tuple_to_point(Self::LOCKED_BOX_SPRITE_POS),
+                tuple_to_point(Self::BOX_SPRITE_SIZE),
+                1.,
+            ),
             title_draw_param: create_sprite_draw_param(
                 tuple_to_point(Self::TITLE_SPRITE_POS),
                 tuple_to_point(Self::TITLE_SPRITE_SIZE),
@@ -1453,7 +1464,12 @@ impl LevelSelect {
         }
     }
 
-    pub fn draw(&self, ctx: &mut Context, spritesheet: &Image) -> GameResult {
+    pub fn draw(
+        &self,
+        ctx: &mut Context,
+        spritesheet: &Image,
+        unlocked_levels: &Vec<bool>,
+    ) -> GameResult {
         graphics::set_transform(
             ctx,
             DrawParam::new()
@@ -1463,8 +1479,13 @@ impl LevelSelect {
         graphics::apply_transformations(ctx)?;
 
         graphics::draw(ctx, spritesheet, self.title_draw_param)?;
-        for box_ in &self.boxes {
-            graphics::draw(ctx, spritesheet, self.box_draw_param.dest(box_.point()))?;
+        for (i, box_) in self.boxes.iter().enumerate() {
+            let box_draw_param = if unlocked_levels[i] {
+                self.box_draw_param
+            } else {
+                self.locked_box_draw_param
+            };
+            graphics::draw(ctx, spritesheet, box_draw_param.dest(box_.point()))?;
         }
 
         Ok(())
@@ -1476,13 +1497,21 @@ enum GameState {
     Playing(World),
 }
 
+#[derive(Serialize, Deserialize, Default)]
+struct SavedData {
+    unlocked: Vec<bool>,
+}
+
 struct Game {
     state: GameState,
     level_infos: Vec<LevelInfo>,
+    saved_data: SavedData,
     tiles: HashMap<TileId, Tile>,
     tilesheet_image: Image,
     spritesheet_image: Image,
 }
+
+const SAVE_FILE: &str = "/data.json";
 
 impl Game {
     pub fn new(ctx: &mut Context) -> Game {
@@ -1504,12 +1533,34 @@ impl Game {
         let tilesheet_image = Image::new(ctx, "/tilesheet.png").unwrap();
         let spritesheet_image = Image::new(ctx, "/spritesheet.png").unwrap();
 
+        let saved_data = ggez::filesystem::open(ctx, SAVE_FILE)
+            .map(|mut file| {
+                let mut contents = String::new();
+                file.read_to_string(&mut contents).unwrap();
+                serde_json::from_str(&contents).map(|res: SavedData|
+                    // if the number of saved levels is not the same as the number of current levels
+                    // invalidate the save
+                    if res.unlocked.len() == level_infos.len() {
+                        Some(res)
+                    } else { None }
+                ).unwrap_or(None)
+            })
+            .unwrap_or(None)
+            .unwrap_or(SavedData {
+                unlocked: {
+                    let mut vec = vec![false; level_infos.len()];
+                    vec[0] = true;
+                    vec
+                },
+            });
+
         Self {
             state: GameState::LevelSelect(LevelSelect::new(&level_infos)),
             level_infos,
             tiles,
             tilesheet_image,
             spritesheet_image,
+            saved_data,
         }
     }
 
@@ -1568,6 +1619,13 @@ impl Game {
 
         tiles
     }
+
+    fn write_data(ctx: &mut Context, saved_data: &SavedData) {
+        match ggez::filesystem::create(ctx, SAVE_FILE) {
+            Ok(file) => serde_json::to_writer(file, &saved_data).unwrap(),
+            Err(e) => println!("Could not write save file: {}", e),
+        }
+    }
 }
 
 impl EventHandler for Game {
@@ -1576,15 +1634,25 @@ impl EventHandler for Game {
             match &mut self.state {
                 GameState::LevelSelect(ref mut level_select) => {
                     if let Some(level_number) = level_select.update(ctx) {
-                        self.state = GameState::Playing(World::new(
-                            &self.tiles,
-                            &self.level_infos,
-                            level_number,
-                        ));
+                        if self.saved_data.unlocked[level_number] {
+                            self.state = GameState::Playing(World::new(
+                                &self.tiles,
+                                &self.level_infos,
+                                level_number,
+                            ));
+                        }
                     }
                 }
                 GameState::Playing(ref mut world) => {
-                    world.update(ctx, &self.tiles, &self.level_infos)
+                    if world.update(ctx, &self.tiles, &self.level_infos) {
+                        if world.init_next_level(&self.tiles, &self.level_infos) {
+                            self.state =
+                                GameState::LevelSelect(LevelSelect::new(&self.level_infos));
+                        } else {
+                            self.saved_data.unlocked[world.current_level_number] = true;
+                            Self::write_data(ctx, &self.saved_data);
+                        }
+                    }
                 }
             };
         }
@@ -1596,7 +1664,7 @@ impl EventHandler for Game {
         // println!("FPS: {}", ggez::timer::fps(ctx));
         match &mut self.state {
             GameState::LevelSelect(ref level_select) => {
-                level_select.draw(ctx, &self.spritesheet_image)?
+                level_select.draw(ctx, &self.spritesheet_image, &self.saved_data.unlocked)?
             }
             GameState::Playing(ref world) => world.draw(
                 ctx,

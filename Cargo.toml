@@ -12,3 +12,5 @@ nalgebra = "0.20"
 ncollide2d = "0.22"
 nphysics2d = "0.14"
 tiled = { git = "https://github.com/mattyhall/rs-tiled" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
