@@ -334,7 +334,7 @@ enum TileType {
     Spikes,
     Wall,
     Gun,
-    Rail,
+    Rail(bool),
     Gravity,
     None,
 }
@@ -342,7 +342,6 @@ enum TileType {
 #[derive(Debug)]
 enum TileData {
     GunData(GunTile),
-    RailData(bool),
     None,
 }
 
@@ -452,7 +451,6 @@ impl TileInstance {
 
         let extra_data = match tile.type_ {
             TileType::Gun => TileData::GunData(GunTile::new()),
-            TileType::Rail => TileData::RailData(parse_property(&tile.info, "is_endpoint")),
             _ => TileData::None,
         };
 
@@ -646,17 +644,17 @@ impl Level {
         let mut rail_set: Vec<Vec<Point2<TileN>>> = Vec::new();
 
         for tile_instance in tile_instances.values() {
-            if let TileData::RailData(true) = tile_instance.extra_data {
-                if !rail_set
+            if Tilemap::get_tile_from_tile_id(tiles, tile_instance.tile_id).type_
+                == TileType::Rail(true)
+                && !rail_set
                     .iter()
                     .flatten()
                     .collect::<Vec<_>>()
                     .contains(&&tile_instance.coords)
-                {
-                    let mut rail = Vec::new();
-                    Self::build_rail(tilematrix, tiles, &mut rail, tile_instance.coords.clone());
-                    rail_set.push(rail);
-                }
+            {
+                let mut rail = Vec::new();
+                Self::build_rail(tilematrix, tiles, &mut rail, tile_instance.coords.clone());
+                rail_set.push(rail);
             }
         }
 
@@ -682,15 +680,24 @@ impl Level {
     ) {
         rail.push(coords.clone());
 
-        Direction::create_adjascent(coords)
-            .into_iter()
-            .flatten()
-            .find(|coords| {
-                !rail.contains(&coords)
-                    && Tilemap::get_tile_from_matrix(tilematrix, tiles, (*coords).clone()).type_
-                        == TileType::Rail
-            })
-            .map(|new_coords| Self::build_rail(tilematrix, tiles, rail, new_coords.clone()));
+        // if we are not currently at a rail endpoint (except if it's the first rail)
+        if rail.len() == 1
+            || Tilemap::get_tile_from_matrix(tilematrix, tiles, coords.clone()).type_
+                != TileType::Rail(true)
+        {
+            Direction::create_adjascent(coords)
+                .into_iter()
+                .flatten()
+                .find(|coords| {
+                    let tile = Tilemap::get_tile_from_matrix(tilematrix, tiles, coords.clone());
+                    !rail.contains(&coords)
+                        && match tile.type_ {
+                            TileType::Rail(_) => true,
+                            _ => false,
+                        }
+                })
+                .map(|new_coords| Self::build_rail(tilematrix, tiles, rail, new_coords.clone()));
+        }
     }
 
     pub fn update(&mut self, physics: &mut Physics) {
@@ -901,7 +908,7 @@ impl Tilemap {
                         "Spikes" => Spikes,
                         "Wall" => Wall,
                         "Gun" => Gun,
-                        "Rail" => Rail,
+                        "Rail" => Rail(parse_property(&tile, "is_endpoint")),
                         "Gravity" => Gravity,
                         tile_type => panic!("Unknown tile type: {}", tile_type),
                     }
