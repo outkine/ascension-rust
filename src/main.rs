@@ -522,7 +522,7 @@ struct Player {
 
 impl Player {
     const MOVEMENT_POWER: N = 100.;
-    const JUMP_POWER: N = 200.;
+    const JUMP_POWER: N = 204.;
     const SIZE: (N, N) = (10., 10.);
     const SPRITE_POS: (N, N) = (0., 0.);
     const MASS: N = 10.;
