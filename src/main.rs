@@ -1001,20 +1001,28 @@ impl Level {
             || LevelInfo::get_tile_from_matrix(tilematrix, tiles, coords.clone()).type_
                 != TileType::Rail(true)
         {
-            Direction::create_adjacent(coords)
+            // we give preference to the non-endpoint rail so that we don't choose a neighboring endpoint
+            // over an actual part of the rail
+            let mut options = Direction::create_adjacent(coords)
                 .into_iter()
                 .flatten()
-                .find(|coords: &Point2<TileN>| {
+                .filter_map(|coords: Point2<TileN>| {
                     let tile = LevelInfo::get_tile_from_matrix(tilematrix, tiles, coords.clone());
-                    !rail.contains(&coords)
-                        && match tile.type_ {
-                            TileType::Rail(_) => true,
-                            _ => false,
+                    if !rail.contains(&coords) {
+                        match tile.type_ {
+                            TileType::Rail(true) => Some((1, coords.clone())),
+                            TileType::Rail(false) => Some((0, coords.clone())),
+                            _ => None,
                         }
+                    } else {
+                        None
+                    }
                 })
-                .map(|new_coords: Point2<TileN>| {
-                    Self::build_rail(tilematrix, tiles, rail, new_coords.clone())
-                });
+                .collect::<Vec<_>>();
+            options.sort_by_key(|(i, _)| *i);
+            options.get(0).map(|(_, new_coords)| {
+                Self::build_rail(tilematrix, tiles, rail, new_coords.clone())
+            });
         }
     }
 
