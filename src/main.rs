@@ -411,7 +411,7 @@ impl TileInstance {
             physics.build_collider(
                 ColliderDesc::new(shape)
                     .translation(translation)
-                    .user_data(ObjectType::Tile(tile.info.id, tile_instance_id)),
+                    .user_data(ObjectType::Tile(TileId(tile.info.id), tile_instance_id)),
                 physics.ground_handle,
                 false,
             );
@@ -424,7 +424,7 @@ impl TileInstance {
             physics.build_collider(
                 ColliderDesc::new(shape)
                     .sensor(!is_solid)
-                    .user_data(ObjectType::Tile(tile.info.id, tile_instance_id)),
+                    .user_data(ObjectType::Tile(TileId(tile.info.id), tile_instance_id)),
                 body_handle,
                 false,
             );
@@ -457,8 +457,8 @@ impl TileInstance {
         };
 
         TileInstance {
-            id: get_id(),
-            tile_id: tile.info.id,
+            id: TileInstanceId(get_id()),
+            tile_id: TileId(tile.info.id),
             draw_param,
             direction,
             coords: coords.clone(),
@@ -467,7 +467,9 @@ impl TileInstance {
     }
 }
 
-type BulletId = Id;
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+struct BulletId(Id);
+
 #[derive(Debug)]
 struct GunTile {
     bullets: HashMap<BulletId, Entity>,
@@ -492,7 +494,7 @@ impl GunTile {
         dir: Direction,
         tile_instance_id: TileInstanceId,
     ) {
-        let bullet_id = get_id();
+        let bullet_id = BulletId(get_id());
         let entity = Entity::new(
             physics,
             tuple_to_point(Self::BULLET_SPRITE_POS),
@@ -523,8 +525,12 @@ impl GunTile {
     }
 }
 
-type RailId = Id;
-type TileInstanceId = Id;
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+struct RailId(Id);
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+struct TileInstanceId(Id);
+
 #[derive(Debug, Default)]
 struct Level {
     tiles: HashMap<TileInstanceId, TileInstance>,
@@ -619,7 +625,7 @@ impl Level {
             .enumerate()
             .filter_map(|(i, tile_id)| {
                 let tile = Tilemap::get_tile_from_tile_id(tiles, *tile_id);
-                let tile_instance_id = get_id();
+                let tile_instance_id = TileInstanceId(get_id());
                 if tile.type_ != TileType::None {
                     Some((
                         tile_instance_id,
@@ -657,7 +663,7 @@ impl Level {
         let rails = rail_set
             .into_iter()
             .map(|rail| {
-                let rail_id = get_id();
+                let rail_id = RailId(get_id());
                 (rail_id, Rail::new(physics, rail, rail_id))
             })
             .collect();
@@ -737,12 +743,12 @@ struct LevelInfo {
     entrance: Point2<TileN>,
 }
 
-const ID_FOR_NO_TILE: TileId = 0b000100000000;
-const FLIP_H: TileId = 0b100000000000;
-const FLIP_V: TileId = 0b010000000000;
-const FLIP_D: TileId = 0b001000000000;
+const TILE_ID_FOR_NO_TILE: TileId = TileId(0b000100000000);
+const FLIP_H: Id = 0b100000000000;
+const FLIP_V: Id = 0b010000000000;
+const FLIP_D: Id = 0b001000000000;
 
-fn apply_transformations(layer_tile: &tiled::LayerTile) -> TileId {
+fn apply_transformations(layer_tile: &tiled::LayerTile) -> Id {
     let mut id = layer_tile.gid;
     if layer_tile.flip_h {
         id = id | FLIP_H
@@ -755,7 +761,7 @@ fn apply_transformations(layer_tile: &tiled::LayerTile) -> TileId {
     };
     id
 }
-fn strip_transformations(id: TileId) -> TileId {
+fn strip_transformations(id: Id) -> Id {
     id & !FLIP_H & !FLIP_V & !FLIP_D
 }
 
@@ -768,8 +774,9 @@ enum Direction {
 }
 
 impl Direction {
-    fn from_id(id: TileId) -> Self {
+    fn from_id(tile_id: TileId) -> Self {
         use Direction::*;
+        let TileId(id) = tile_id;
         match (id & FLIP_H != 0, id & FLIP_V != 0, id & FLIP_D != 0) {
             (false, _, true) => West,
             (true, _, true) => East,
@@ -849,7 +856,9 @@ impl Direction {
     }
 }
 
-type TileId = Id;
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+struct TileId(Id);
+
 #[derive(Debug)]
 struct Tilemap {
     tiles: HashMap<TileId, Tile>,
@@ -899,7 +908,7 @@ impl Tilemap {
                 });
                 tile_type.map(|tile_type| {
                     (
-                        tile.id,
+                        TileId(tile.id),
                         Tile {
                             type_: tile_type,
                             info: tile,
@@ -909,46 +918,49 @@ impl Tilemap {
             })
             .collect::<HashMap<TileId, Tile>>();
 
-        if tiles.contains_key(&ID_FOR_NO_TILE) {
+        if tiles.contains_key(&TILE_ID_FOR_NO_TILE) {
             panic!("ID_FOR_NO_TILE is not unique.")
         }
 
-        tiles.insert(
-            ID_FOR_NO_TILE,
-            Tile {
-                type_: TileType::None,
-                info: tiled::Tile {
-                    id: ID_FOR_NO_TILE,
-                    images: Vec::new(),
-                    properties: HashMap::new(),
-                    objectgroup: None,
-                    animation: None,
-                    tile_type: None,
-                    probability: 0.,
+        {
+            let TileId(id) = TILE_ID_FOR_NO_TILE;
+            tiles.insert(
+                TILE_ID_FOR_NO_TILE,
+                Tile {
+                    type_: TileType::None,
+                    info: tiled::Tile {
+                        id,
+                        images: Vec::new(),
+                        properties: HashMap::new(),
+                        objectgroup: None,
+                        animation: None,
+                        tile_type: None,
+                        probability: 0.,
+                    },
                 },
-            },
-        );
+            );
+        }
 
         let tilevec = tilemap.layers[0]
             .tiles
             .iter()
             .flatten()
             .map(|layer_tile| apply_transformations(&layer_tile))
-            .collect::<Vec<TileId>>();
+            .collect::<Vec<Id>>();
 
         let tilematrix =
             na::DMatrix::from_vec(tilemap.width as TileN, tilemap.height as TileN, tilevec).map(
                 |id| {
                     id.checked_sub(first_gid)
                         .map(|id| {
-                            if tiles.contains_key(&strip_transformations(id)) {
-                                Some(id)
+                            if tiles.contains_key(&TileId(strip_transformations(id))) {
+                                Some(TileId(id))
                             } else {
                                 None
                             }
                         })
                         .flatten()
-                        .unwrap_or(ID_FOR_NO_TILE)
+                        .unwrap_or(TILE_ID_FOR_NO_TILE)
                 },
             );
 
@@ -1004,8 +1016,9 @@ impl Tilemap {
             .expect("Matrix tile id query out of bounds.")
     }
 
-    pub fn get_tile_from_tile_id(tiles: &HashMap<TileId, Tile>, id: TileId) -> &Tile {
-        &tiles[&strip_transformations(id)]
+    pub fn get_tile_from_tile_id(tiles: &HashMap<TileId, Tile>, tile_id: TileId) -> &Tile {
+        let TileId(id) = tile_id;
+        &tiles[&TileId(strip_transformations(id))]
     }
 
     pub fn get_tile_from_matrix<'a>(
