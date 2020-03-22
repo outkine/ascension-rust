@@ -685,7 +685,7 @@ impl Level {
             || Tilemap::get_tile_from_matrix(tilematrix, tiles, coords.clone()).type_
                 != TileType::Rail(true)
         {
-            Direction::create_adjascent(coords)
+            Direction::create_adjacent(coords)
                 .into_iter()
                 .flatten()
                 .find(|coords| {
@@ -853,7 +853,7 @@ impl Direction {
         }
     }
 
-    fn create_adjascent(point: Point2<TileN>) -> Vec<Option<Point2<TileN>>> {
+    fn create_adjacent(point: Point2<TileN>) -> Vec<Option<Point2<TileN>>> {
         vec![
             point.x.checked_sub(1).map(|x| Point2::new(x, point.y)),
             point.y.checked_sub(1).map(|y| Point2::new(point.x, y)),
@@ -1070,7 +1070,7 @@ impl Tilemap {
         coords: Point2<usize>,
         wallpaper: &mut Vec<Point2<usize>>,
     ) {
-        for new_coords in Direction::create_adjascent(coords).iter().flatten() {
+        for new_coords in Direction::create_adjacent(coords).iter().flatten() {
             let tile_type =
                 Self::get_tile_from_matrix(tilematrix, tiles, (*new_coords).clone()).type_;
             if !wallpaper.contains(new_coords) && tile_type != TileType::Wall {
