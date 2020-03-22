@@ -659,6 +659,7 @@ struct TileInstance {
 #[derive(Debug)]
 enum TileData {
     GunData(GunTile),
+    GravityData(bool, DrawParam),
     None,
 }
 
@@ -745,6 +746,16 @@ impl TileInstance {
 
         let extra_data = match tile.type_ {
             TileType::Gun => TileData::GunData(GunTile::new()),
+            TileType::Gravity => TileData::GravityData(
+                false,
+                create_sprite_draw_param(
+                    Point2::new((src_x + 1) as N, src_y as N),
+                    Point2::new(Tile::SIZE, Tile::SIZE),
+                    Tile::SIZE,
+                )
+                .rotation(rotation)
+                .dest(point_to_old(real_point.clone())),
+            ),
             _ => TileData::None,
         };
 
@@ -1077,12 +1088,22 @@ impl Level {
                 },
                 (ObjectType::Player, other) | (other, ObjectType::Player) => match other {
                     ObjectType::Tile(_, tile_instance_id) => {
-                        let collided_tile_instance = &self.tile_instances[&tile_instance_id];
-                        let collided_tile =
-                            LevelInfo::get_tile_from_tile_id(tiles, collided_tile_instance.tile_id);
+                        let collided_tile = LevelInfo::get_tile_from_tile_id(
+                            tiles,
+                            self.tile_instances[&tile_instance_id].tile_id,
+                        );
                         match collided_tile.type_ {
                             TileType::Gravity => {
-                                let gravity_dir = collided_tile_instance.direction.opposite();
+                                self.turn_off_gravity_machines();
+                                let tile_instance =
+                                    self.tile_instances.get_mut(&tile_instance_id).unwrap();
+
+                                if let TileData::GravityData(ref mut is_on, _) =
+                                    &mut tile_instance.extra_data
+                                {
+                                    *is_on = true;
+                                }
+                                let gravity_dir = tile_instance.direction.opposite();
                                 if gravity_dir != self.physics.gravity_dir {
                                     self.physics.set_gravity_dir(gravity_dir, &mut self.player);
                                 }
@@ -1122,12 +1143,21 @@ impl Level {
     }
 
     fn reset_level(&mut self, level_info: &LevelInfo) {
+        self.turn_off_gravity_machines();
         self.player.entity.set_position(
             &mut self.physics,
             Tile::point_to_real(level_info.entrance.clone()),
         );
         self.physics
             .set_gravity_dir(Direction::South, &mut self.player)
+    }
+
+    fn turn_off_gravity_machines(&mut self) {
+        for tile in self.tile_instances.values_mut() {
+            if let TileData::GravityData(ref mut is_on, _) = &mut tile.extra_data {
+                *is_on = false;
+            }
+        }
     }
 
     pub fn draw(
@@ -1161,7 +1191,17 @@ impl Level {
         // self.physics.draw_colliders(ctx)?;
 
         for tile in self.tile_instances.values() {
-            graphics::draw(ctx, tilesheet, tile.draw_param)?;
+            match &tile.extra_data {
+                TileData::GravityData(turned_on, turned_on_draw_param) => {
+                    let draw_param = if *turned_on {
+                        *turned_on_draw_param
+                    } else {
+                        tile.draw_param
+                    };
+                    graphics::draw(ctx, tilesheet, draw_param)?;
+                }
+                _ => graphics::draw(ctx, tilesheet, tile.draw_param)?,
+            }
         }
 
         for tile in self.tile_instances.values() {
