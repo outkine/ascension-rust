@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::default::Default;
 
 use ggez::event::{EventHandler, KeyCode};
-use ggez::graphics::Color;
+use ggez::graphics::{Color, DrawMode, FillOptions};
 use ggez::graphics::{DrawParam, Image, Rect};
-use ggez::input::keyboard;
+use ggez::input::{keyboard, mouse};
 use ggez::{graphics, Context, ContextBuilder, GameResult};
 
 use na::{DMatrix, Isometry2, Point2, Scalar, Vector2};
@@ -1108,7 +1108,6 @@ impl Level {
         tilesheet: &Image,
         level_info: &LevelInfo,
     ) -> GameResult {
-        graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         graphics::set_transform(
             ctx,
             DrawParam::new()
@@ -1166,10 +1165,14 @@ struct World {
 }
 
 impl World {
-    pub fn new(tiles: &HashMap<TileId, Tile>, level_infos: &Vec<LevelInfo>) -> Self {
+    pub fn new(
+        tiles: &HashMap<TileId, Tile>,
+        level_infos: &Vec<LevelInfo>,
+        level_number: usize,
+    ) -> Self {
         Self {
-            current_level: Level::new(tiles, &level_infos[3]),
-            current_level_number: 3,
+            current_level: Level::new(tiles, &level_infos[level_number]),
+            current_level_number: level_number,
         }
     }
 
@@ -1373,8 +1376,58 @@ impl LevelInfo {
     }
 }
 
+struct LevelSelect {
+    boxes: Vec<Rect>,
+}
+
+impl LevelSelect {
+    const BOX_SIZE: N = 10.;
+    const BOX_MARGIN: N = 10.;
+
+    pub fn new(levels_info: &Vec<LevelInfo>) -> Self {
+        Self {
+            boxes: levels_info
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    Rect::new(
+                        (i as N) * (Self::BOX_SIZE + Self::BOX_MARGIN),
+                        0.,
+                        Self::BOX_SIZE,
+                        Self::BOX_SIZE,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub fn update(&self, ctx: &Context) -> Option<usize> {
+        if mouse::button_pressed(ctx, mouse::MouseButton::Left) {
+            self.boxes
+                .iter()
+                .position(|box_| box_.contains(mouse::position(ctx)))
+        } else {
+            None
+        }
+    }
+
+    pub fn draw(&self, ctx: &mut Context) -> GameResult {
+        for box_ in &self.boxes {
+            let rect = graphics::Mesh::new_rectangle(
+                ctx,
+                DrawMode::Fill(FillOptions::DEFAULT),
+                box_.clone(),
+                graphics::BLACK,
+            )?;
+            graphics::draw(ctx, &rect, DrawParam::new())?;
+        }
+
+        Ok(())
+    }
+}
+
 enum GameState {
-    LevelSelect,
+    LevelSelect(LevelSelect),
     Playing(World),
 }
 
@@ -1407,7 +1460,7 @@ impl Game {
         let spritesheet_image = Image::new(ctx, "/spritesheet.png").unwrap();
 
         Self {
-            state: GameState::LevelSelect,
+            state: GameState::LevelSelect(LevelSelect::new(&level_infos)),
             level_infos,
             tiles,
             tilesheet_image,
@@ -1476,7 +1529,15 @@ impl EventHandler for Game {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         while ggez::timer::check_update_time(ctx, 60) {
             match &mut self.state {
-                GameState::LevelSelect => (),
+                GameState::LevelSelect(ref mut level_select) => {
+                    if let Some(level_number) = level_select.update(ctx) {
+                        self.state = GameState::Playing(World::new(
+                            &self.tiles,
+                            &self.level_infos,
+                            level_number,
+                        ));
+                    }
+                }
                 GameState::Playing(ref mut world) => {
                     world.update(ctx, &self.tiles, &self.level_infos)
                 }
@@ -1486,12 +1547,11 @@ impl EventHandler for Game {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         // println!("FPS: {}", ggez::timer::fps(ctx));
         match &mut self.state {
-            GameState::LevelSelect => {
-                self.state = GameState::Playing(World::new(&self.tiles, &self.level_infos));
-            }
-            GameState::Playing(ref mut world) => world.draw(
+            GameState::LevelSelect(ref level_select) => level_select.draw(ctx)?,
+            GameState::Playing(ref world) => world.draw(
                 ctx,
                 &self.spritesheet_image,
                 &self.tilesheet_image,
