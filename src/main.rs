@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::default::Default;
 
 use ggez::event::{EventHandler, KeyCode};
-use ggez::graphics::{Color, DrawMode, FillOptions};
+use ggez::graphics::Color;
 use ggez::graphics::{DrawParam, Image, Rect};
 use ggez::input::{keyboard, mouse};
 use ggez::{graphics, Context, ContextBuilder, GameResult};
@@ -102,6 +102,17 @@ fn draw_rect(ctx: &mut Context, rect: Rect, color: graphics::Color) -> GameResul
     )?;
     graphics::draw(ctx, &circle, DrawParam::new())?;
     Ok(())
+}
+
+fn create_sprite_draw_param(pos: Point2<N>, size: Point2<N>, pixel_size: N) -> DrawParam {
+    DrawParam::new()
+        .src(Rect::new(
+            pos.x * (pixel_size / IMAGE_WIDTH),
+            pos.y * (pixel_size / IMAGE_HEIGHT),
+            size.x / IMAGE_WIDTH,
+            size.y / IMAGE_HEIGHT,
+        ))
+        .offset(point_to_old(Point2::new(0.5, 0.5)))
 }
 
 fn parse_property(tile: &tiled::Tile, name: &str) -> bool {
@@ -442,14 +453,7 @@ impl Entity {
         user_data: ObjectType,
         ccd_enabled: bool,
     ) -> Self {
-        let draw_param = DrawParam::new()
-            .src(Rect::new(
-                sprite_pos.x * (1. / IMAGE_WIDTH),
-                sprite_pos.y * (1. / IMAGE_HEIGHT),
-                size.x / IMAGE_WIDTH,
-                size.y / IMAGE_HEIGHT,
-            ))
-            .offset(point_to_old(Point2::new(0.5, 0.5)));
+        let draw_param = create_sprite_draw_param(sprite_pos.clone(), size.clone(), 1.);
 
         let body_handle = physics.build_body(rigid_body_desc.translation(point_to_vector(pos)));
 
@@ -720,16 +724,13 @@ impl TileInstance {
         let direction = Direction::from_id(tile_id);
         let rotation = direction.to_rotation();
 
-        let draw_param = graphics::DrawParam::new()
-            .src(Rect::new(
-                src_x as N * (Tile::SIZE / IMAGE_WIDTH),
-                src_y as N * (Tile::SIZE / IMAGE_HEIGHT),
-                Tile::SIZE / IMAGE_WIDTH,
-                Tile::SIZE / IMAGE_HEIGHT,
-            ))
-            .offset(point_to_old(Point2::new(0.5, 0.5)))
-            .rotation(rotation)
-            .dest(point_to_old(real_point.clone()));
+        let draw_param = create_sprite_draw_param(
+            Point2::new(src_x as N, src_y as N),
+            Point2::new(Tile::SIZE, Tile::SIZE),
+            Tile::SIZE,
+        )
+        .rotation(rotation)
+        .dest(point_to_old(real_point.clone()));
 
         let extra_data = match tile.type_ {
             TileType::Gun => TileData::GunData(GunTile::new()),
@@ -890,6 +891,7 @@ impl Rail {
 struct TileInstanceId(Id);
 
 struct Level {
+    wallpaper_draw_param: DrawParam,
     tile_instances: HashMap<TileInstanceId, TileInstance>,
     rails: HashMap<RailId, Rail>,
     player: Player,
@@ -897,6 +899,8 @@ struct Level {
 }
 
 impl Level {
+    const WALLPAPER_SPRITE_POS: (N, N) = (3., 0.);
+
     pub fn new(tiles: &HashMap<TileId, Tile>, level_info: &LevelInfo) -> Self {
         let mut physics = Physics::new();
 
@@ -965,6 +969,11 @@ impl Level {
             player,
             tile_instances,
             rails,
+            wallpaper_draw_param: create_sprite_draw_param(
+                tuple_to_point(Self::WALLPAPER_SPRITE_POS),
+                Point2::new(Tile::SIZE, Tile::SIZE),
+                Tile::SIZE,
+            ),
         }
     }
 
@@ -1027,7 +1036,7 @@ impl Level {
         }
 
         for (user_datas, _) in self.physics.collision_events() {
-            println!("Collision: {:?}", user_datas);
+            // println!("Collision: {:?}", user_datas);
 
             match user_datas {
                 (ObjectType::Bullet(gun_id, bullet_id), other)
@@ -1124,14 +1133,7 @@ impl Level {
             graphics::draw(
                 ctx,
                 tilesheet,
-                DrawParam::new()
-                    .src(Rect::new(
-                        3. * (Tile::SIZE / IMAGE_WIDTH),
-                        0.,
-                        Tile::SIZE / IMAGE_WIDTH,
-                        Tile::SIZE / IMAGE_HEIGHT,
-                    ))
-                    .offset(point_to_old(Point2::new(0.5, 0.5)))
+                self.wallpaper_draw_param
                     .dest(point_to_old(Tile::point_to_real(coords.clone()))),
             )?;
         }
@@ -1377,49 +1379,83 @@ impl LevelInfo {
 }
 
 struct LevelSelect {
+    box_draw_param: DrawParam,
+    title_draw_param: DrawParam,
     boxes: Vec<Rect>,
 }
 
 impl LevelSelect {
-    const BOX_SIZE: N = 10.;
-    const BOX_MARGIN: N = 10.;
+    const BOX_SPRITE_POS: (N, N) = (0., 48.);
+    const BOX_SPRITE_SIZE: (N, N) = (10., 10.);
+    const BOX_MARGIN: N = 2.;
+
+    const TITLE_SPRITE_POS: (N, N) = (0., 17.);
+    const TITLE_SPRITE_SIZE: (N, N) = (81., 31.);
+
+    const SCALE: N = SCALE * 2.;
 
     pub fn new(levels_info: &Vec<LevelInfo>) -> Self {
+        let unscaled_window_size = WINDOW_SIZE / Self::SCALE;
+        let box_offset = Point2::new(
+            (unscaled_window_size
+                - (levels_info.len() as N) * (Self::BOX_SPRITE_SIZE.0 + Self::BOX_MARGIN))
+                / 2.
+                + Self::BOX_SPRITE_SIZE.0 / 2.,
+            unscaled_window_size / 2. + Self::BOX_SPRITE_SIZE.1,
+        );
+
         Self {
             boxes: levels_info
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
                     Rect::new(
-                        (i as N) * (Self::BOX_SIZE + Self::BOX_MARGIN),
-                        0.,
-                        Self::BOX_SIZE,
-                        Self::BOX_SIZE,
+                        (i as N) * (Self::BOX_SPRITE_SIZE.0 + Self::BOX_MARGIN) + box_offset.x,
+                        box_offset.y,
+                        Self::BOX_SPRITE_SIZE.0,
+                        Self::BOX_SPRITE_SIZE.1,
                     )
                 })
                 .collect(),
+            box_draw_param: create_sprite_draw_param(
+                tuple_to_point(Self::BOX_SPRITE_POS),
+                tuple_to_point(Self::BOX_SPRITE_SIZE),
+                1.,
+            ),
+            title_draw_param: create_sprite_draw_param(
+                tuple_to_point(Self::TITLE_SPRITE_POS),
+                tuple_to_point(Self::TITLE_SPRITE_SIZE),
+                1.,
+            )
+            .dest(point_to_old(Point2::new(
+                unscaled_window_size / 2.,
+                unscaled_window_size / 4.,
+            ))),
         }
     }
 
     pub fn update(&self, ctx: &Context) -> Option<usize> {
         if mouse::button_pressed(ctx, mouse::MouseButton::Left) {
-            self.boxes
-                .iter()
-                .position(|box_| box_.contains(mouse::position(ctx)))
+            let mouse_pos: ggez::nalgebra::Point2<N> = mouse::position(ctx).into();
+            let mouse_pos = mouse_pos / Self::SCALE;
+            self.boxes.iter().position(|box_| box_.contains(mouse_pos))
         } else {
             None
         }
     }
 
-    pub fn draw(&self, ctx: &mut Context) -> GameResult {
+    pub fn draw(&self, ctx: &mut Context, spritesheet: &Image) -> GameResult {
+        graphics::set_transform(
+            ctx,
+            DrawParam::new()
+                .scale(vector_to_old(Vector2::new(Self::SCALE, Self::SCALE)))
+                .to_matrix(),
+        );
+        graphics::apply_transformations(ctx)?;
+
+        graphics::draw(ctx, spritesheet, self.title_draw_param)?;
         for box_ in &self.boxes {
-            let rect = graphics::Mesh::new_rectangle(
-                ctx,
-                DrawMode::Fill(FillOptions::DEFAULT),
-                box_.clone(),
-                graphics::BLACK,
-            )?;
-            graphics::draw(ctx, &rect, DrawParam::new())?;
+            graphics::draw(ctx, spritesheet, self.box_draw_param.dest(box_.point()))?;
         }
 
         Ok(())
@@ -1550,7 +1586,9 @@ impl EventHandler for Game {
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
         // println!("FPS: {}", ggez::timer::fps(ctx));
         match &mut self.state {
-            GameState::LevelSelect(ref level_select) => level_select.draw(ctx)?,
+            GameState::LevelSelect(ref level_select) => {
+                level_select.draw(ctx, &self.spritesheet_image)?
+            }
             GameState::Playing(ref world) => world.draw(
                 ctx,
                 &self.spritesheet_image,
