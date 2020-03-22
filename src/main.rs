@@ -1414,8 +1414,7 @@ impl LevelSelect {
         let box_offset = Point2::new(
             (unscaled_window_size
                 - (levels_info.len() as N) * (Self::BOX_SPRITE_SIZE.0 + Self::BOX_MARGIN))
-                / 2.
-                + Self::BOX_SPRITE_SIZE.0 / 2.,
+                / 2.,
             unscaled_window_size / 2. + Self::BOX_SPRITE_SIZE.1,
         );
 
@@ -1436,12 +1435,14 @@ impl LevelSelect {
                 tuple_to_point(Self::BOX_SPRITE_POS),
                 tuple_to_point(Self::BOX_SPRITE_SIZE),
                 1.,
-            ),
+            )
+            .offset(ggez::nalgebra::Point2::origin()),
             locked_box_draw_param: create_sprite_draw_param(
                 tuple_to_point(Self::LOCKED_BOX_SPRITE_POS),
                 tuple_to_point(Self::BOX_SPRITE_SIZE),
                 1.,
-            ),
+            )
+            .offset(ggez::nalgebra::Point2::origin()),
             title_draw_param: create_sprite_draw_param(
                 tuple_to_point(Self::TITLE_SPRITE_POS),
                 tuple_to_point(Self::TITLE_SPRITE_SIZE),
