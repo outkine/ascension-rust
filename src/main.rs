@@ -1498,12 +1498,12 @@ fn main() {
         cb = cb.add_resource_path(path);
     }
 
-    let (mut ctx, mut event_loop) = cb.build().expect("Could not create lgez context.");
+    let (mut ctx, mut event_loop) = cb.build().expect("Could not create ggez context.");
 
     let mut my_game = MyGame::new(&mut ctx);
 
     match ggez::event::run(&mut ctx, &mut event_loop, &mut my_game) {
         Ok(_) => println!("Exited cleanly."),
-        Err(e) => println!("Error occured: {}", e),
+        Err(e) => println!("Error occurred: {}", e),
     }
 }
