@@ -1503,7 +1503,7 @@ impl EventHandler for Game {
 }
 
 const SCALE: N = 2.;
-const WINDOW_SIZE: N = 300.;
+const WINDOW_SIZE: N = 600.;
 
 fn main() {
     let mut cb = ContextBuilder::new("ascension-rust", "Anton")
