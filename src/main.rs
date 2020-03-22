@@ -545,7 +545,12 @@ impl Player {
         }
     }
 
-    pub fn update(&mut self, ctx: &Context, physics: &mut Physics, rails: &HashMap<RailId, Rail>) {
+    pub fn update(
+        &mut self,
+        ctx: &Context,
+        physics: &mut Physics,
+        rails: &HashMap<RailId, Rail>,
+    ) -> bool {
         let movement_dir = if keyboard::is_key_pressed(ctx, KeyCode::Left) {
             -1.
         } else if keyboard::is_key_pressed(ctx, KeyCode::Right) {
@@ -588,6 +593,7 @@ impl Player {
                             _ => (),
                         }
                     }
+                    ObjectType::Bullet(_, _) => return true,
                     _ => (),
                 },
                 _ => (),
@@ -604,6 +610,8 @@ impl Player {
             self.entity
                 .set_velocity(physics, add(jump_vector, velocity));
         }
+
+        false
     }
 }
 
@@ -1013,7 +1021,9 @@ impl Level {
         tiles: &HashMap<TileId, Tile>,
         level_info: &LevelInfo,
     ) -> bool {
-        self.player.update(ctx, &mut self.physics, &self.rails);
+        if self.player.update(ctx, &mut self.physics, &self.rails) {
+            self.reset_level(level_info);
+        }
 
         for (instance_id, tile) in self.tile_instances.iter_mut() {
             match &mut tile.extra_data {
@@ -1041,7 +1051,6 @@ impl Level {
             match user_datas {
                 (ObjectType::Bullet(gun_id, bullet_id), other)
                 | (other, ObjectType::Bullet(gun_id, bullet_id)) => match other {
-                    ObjectType::Player => self.reset_level(level_info),
                     ObjectType::Platform(_) | ObjectType::Tile(_, _) => {
                         if let Some(TileData::GunData(ref mut gun_tile)) = &mut self
                             .tile_instances
