@@ -688,7 +688,7 @@ impl Level {
             Direction::create_adjacent(coords)
                 .into_iter()
                 .flatten()
-                .find(|coords| {
+                .find(|coords: &Point2<TileN>| {
                     let tile = Tilemap::get_tile_from_matrix(tilematrix, tiles, coords.clone());
                     !rail.contains(&coords)
                         && match tile.type_ {
@@ -696,7 +696,9 @@ impl Level {
                             _ => false,
                         }
                 })
-                .map(|new_coords| Self::build_rail(tilematrix, tiles, rail, new_coords.clone()));
+                .map(|new_coords: Point2<TileN>| {
+                    Self::build_rail(tilematrix, tiles, rail, new_coords.clone())
+                });
         }
     }
 
