@@ -250,7 +250,7 @@ struct Physics {
 }
 
 impl Physics {
-    const GRAVITY: N = 400.;
+    const GRAVITY: N = 600.;
 
     pub fn new() -> Self {
         let geometrical_world = world::DefaultGeometricalWorld::new();
@@ -472,7 +472,7 @@ impl Entity {
                 // increasing linear_prediction from a default of 0.001 is necessary to prevent a bug
                 // where the engine doesn't detect the collision between the player and a
                 // downwards moving platform
-                .linear_prediction(0.01)
+                // .linear_prediction(0.05)
                 .user_data(user_data),
             body_handle,
             ccd_enabled,
@@ -527,7 +527,7 @@ struct Player {
 
 impl Player {
     const MOVEMENT_POWER: N = 100.;
-    const JUMP_POWER: N = 204.;
+    const JUMP_POWER: N = 230.;
     const SIZE: (N, N) = (10., 10.);
     const SPRITE_POS: (N, N) = (0., 0.);
     const MASS: N = 10.;
@@ -1750,7 +1750,7 @@ impl EventHandler for Game {
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, Color::from(BACKGROUND_COLOR));
-        // println!("FPS: {}", ggez::timer::fps(ctx));
+        println!("FPS: {}", ggez::timer::fps(ctx));
         match &mut self.state {
             GameState::LevelSelect(ref level_select) => {
                 level_select.draw(ctx, &self.spritesheet_image, &self.saved_data.unlocked)?
