@@ -30,6 +30,7 @@ const IMAGE_WIDTH: N = 250.;
 const IMAGE_HEIGHT: N = 250.;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (152, 152, 152);
+const PINK_COLOR: (u8, u8, u8) = (128, 108, 108);
 
 // for compatibility with the nalgebra that ggez uses
 fn point_to_old<N: Copy + Scalar>(point: Point2<N>) -> ggez::nalgebra::Point2<N> {
@@ -1745,7 +1746,7 @@ impl EventHandler for Game {
                     ctx,
                     &text,
                     ggez::nalgebra::Point2::new(0., -Self::FONT_SIZE),
-                    Some(graphics::BLACK),
+                    Some(Color::from(PINK_COLOR)),
                 );
 
                 graphics::draw_queued_text(
