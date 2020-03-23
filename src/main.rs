@@ -1469,7 +1469,7 @@ impl LevelSelect {
         let unscaled_window_size = WINDOW_SIZE / Self::SCALE;
         let box_offset = Point2::new(
             (unscaled_window_size
-                - (levels_info.len() as N) * (Self::BOX_SPRITE_SIZE.0 + Self::BOX_MARGIN))
+                - (LEVEL_SET_SIZE as N) * (Self::BOX_SPRITE_SIZE.0 + Self::BOX_MARGIN))
                 / 2.,
             unscaled_window_size / 2. + Self::BOX_SPRITE_SIZE.1,
         );
@@ -1480,8 +1480,11 @@ impl LevelSelect {
                 .enumerate()
                 .map(|(i, _)| {
                     Rect::new(
-                        (i as N) * (Self::BOX_SPRITE_SIZE.0 + Self::BOX_MARGIN) + box_offset.x,
-                        box_offset.y,
+                        ((i % LEVEL_SET_SIZE) as N) * (Self::BOX_SPRITE_SIZE.0 + Self::BOX_MARGIN)
+                            + box_offset.x,
+                        ((i / LEVEL_SET_SIZE) as N).floor()
+                            * (Self::BOX_SPRITE_SIZE.1 + Self::BOX_MARGIN)
+                            + box_offset.y,
                         Self::BOX_SPRITE_SIZE.0,
                         Self::BOX_SPRITE_SIZE.1,
                     )
@@ -1559,6 +1562,8 @@ struct SavedData {
     unlocked: Vec<bool>,
 }
 
+const LEVEL_SET_SIZE: usize = 10;
+
 struct Game {
     state: GameState,
     level_infos: Vec<LevelInfo>,
@@ -1607,11 +1612,9 @@ impl Game {
             })
             .unwrap_or(None)
             .unwrap_or(SavedData {
-                unlocked: {
-                    let mut vec = vec![false; level_infos.len()];
-                    vec[0] = true;
-                    vec
-                },
+                unlocked: (0..level_infos.len())
+                    .map(|i| i % LEVEL_SET_SIZE == 0)
+                    .collect::<Vec<_>>(),
             });
 
         Self {
