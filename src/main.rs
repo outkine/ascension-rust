@@ -1051,6 +1051,10 @@ impl Level {
         tiles: &HashMap<TileId, Tile>,
         level_info: &LevelInfo,
     ) -> bool {
+        for rail in self.rails.values_mut() {
+            rail.update(&mut self.physics);
+        }
+
         if self.player.update(ctx, &mut self.physics, &self.rails) {
             self.reset_level(level_info);
             return false;
@@ -1070,10 +1074,6 @@ impl Level {
                 }
                 _ => (),
             }
-        }
-
-        for rail in self.rails.values_mut() {
-            rail.update(&mut self.physics);
         }
 
         for (user_datas, _) in self.physics.collision_events() {
