@@ -1763,7 +1763,7 @@ impl EventHandler for Game {
                     &self.level_infos,
                 )?;
 
-                let mut text = graphics::Text::new(world.current_level_number.to_string());
+                let mut text = graphics::Text::new((world.current_level_number + 1).to_string());
                 text.set_font(self.font, graphics::Scale::uniform(Self::FONT_SIZE));
 
                 graphics::queue_text(
