@@ -1103,7 +1103,13 @@ impl Level {
                         );
                         match collided_tile.type_ {
                             TileType::Gravity => {
-                                self.turn_off_gravity_machines();
+                                for tile in self.tile_instances.values_mut() {
+                                    if let TileData::GravityData(ref mut is_on, _) =
+                                        &mut tile.extra_data
+                                    {
+                                        *is_on = false;
+                                    }
+                                }
                                 let tile_instance =
                                     self.tile_instances.get_mut(&tile_instance_id).unwrap();
 
@@ -1162,7 +1168,7 @@ impl Level {
                         self.physics.collider_set.remove(bullet.collider_handle);
                         self.physics.body_set.remove(bullet.body_handle);
                     }
-                    gun_tile.bullets = HashMap::new();
+                    gun_tile.bullets.clear();
                 }
                 TileData::GravityData(ref mut is_on, _) => *is_on = false,
                 _ => (),
