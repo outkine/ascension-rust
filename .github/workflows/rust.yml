@@ -24,14 +24,14 @@ jobs:
       run: |
         mkdir dist/resources
         cp -Path target/release/game.exe -Destination dist
-        cp -Path resources/tilesheet.png,resources/spritesheet.png,resources/tilemap.tmx -Destination dist/resources
+        cp -Path resources/tilesheet.png,resources/spritesheet.png,resources/tilemap.tmx,resources/Pixellari.ttf -Destination dist/resources
 
     - name: Create Dist Folder MacOS/Linux
       if: matrix.os == 'macos-latest' || matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p dist/resources
         cp target/release/game dist
-        cp resources/tilesheet.png resources/spritesheet.png resources/tilemap.tmx dist/resources
+        cp resources/tilesheet.png resources/spritesheet.png resources/tilemap.tmx resources/Pixellari.ttf dist/resources
 
     - uses: actions/upload-artifact@v2-preview
       with:

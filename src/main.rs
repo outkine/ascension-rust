@@ -1350,27 +1350,35 @@ impl LevelInfo {
                 let mut wallpaper = Vec::new();
                 Self::build_wallpaper(&tilematrix, &tiles, &mut wallpaper, entrance.clone());
 
-                // we calculate the level size by how far left and right the wallpaper stretches
-                let xs = &wallpaper.iter().map(|point| point.x).collect::<Vec<_>>();
-                // prevent overflow caused by subtracting 1 from 0
-                let x_bounds = (
-                    xs.iter().min().unwrap().saturating_sub(1),
-                    xs.iter().max().unwrap() + 2,
-                );
+                let bounds = &[0, 1]
+                    .iter()
+                    .map(|dim| {
+                        // we calculate the level size by how far left and right/up and down the wallpaper stretches
+                        let dims = &wallpaper
+                            .iter()
+                            .map(|point| point[*dim])
+                            .collect::<Vec<_>>();
+                        // prevent overflow caused by subtracting 1 from 0
+                        (
+                            dims.iter().min().unwrap().saturating_sub(1),
+                            dims.iter().max().unwrap() + 2,
+                        )
+                    })
+                    .collect::<Vec<_>>();
 
                 let matrix_slice = tilematrix
                     .slice(
-                        (x_bounds.0, 0),
-                        (x_bounds.1 - x_bounds.0, tilematrix.ncols()),
+                        (bounds[0].0, bounds[1].0),
+                        (bounds[0].1 - bounds[0].0, bounds[1].1 - bounds[1].0),
                     )
                     .into_owned();
 
-                // offset x to account for the local coordinates of the slice
+                // offset to account for the local coordinates of the slice
                 let wallpaper = wallpaper
                     .iter()
-                    .map(|point| Point2::new(point.x - x_bounds.0, point.y))
+                    .map(|point| Point2::new(point.x - bounds[0].0, point.y - bounds[1].0))
                     .collect();
-                let entrance = Point2::new(entrance.x - x_bounds.0, entrance.y);
+                let entrance = Point2::new(entrance.x - bounds[0].0, entrance.y - bounds[1].0);
 
                 Self {
                     tilematrix: matrix_slice,
@@ -1558,11 +1566,14 @@ struct Game {
     tiles: HashMap<TileId, Tile>,
     tilesheet_image: Image,
     spritesheet_image: Image,
+    font: graphics::Font,
 }
 
 const SAVE_FILE: &str = "/data.json";
 
 impl Game {
+    const FONT_SIZE: N = 16.;
+
     pub fn new(ctx: &mut Context) -> Game {
         graphics::set_default_filter(ctx, graphics::FilterMode::Nearest);
 
@@ -1610,6 +1621,7 @@ impl Game {
             tilesheet_image,
             spritesheet_image,
             saved_data,
+            font: graphics::Font::new(ctx, "/Pixellari.ttf").unwrap(),
         }
     }
 
@@ -1715,12 +1727,31 @@ impl EventHandler for Game {
             GameState::LevelSelect(ref level_select) => {
                 level_select.draw(ctx, &self.spritesheet_image, &self.saved_data.unlocked)?
             }
-            GameState::Playing(ref world) => world.draw(
-                ctx,
-                &self.spritesheet_image,
-                &self.tilesheet_image,
-                &self.level_infos,
-            )?,
+            GameState::Playing(ref world) => {
+                world.draw(
+                    ctx,
+                    &self.spritesheet_image,
+                    &self.tilesheet_image,
+                    &self.level_infos,
+                )?;
+
+                let mut text = graphics::Text::new(world.current_level_number.to_string());
+                text.set_font(self.font, graphics::Scale::uniform(Self::FONT_SIZE));
+
+                graphics::queue_text(
+                    ctx,
+                    &text,
+                    ggez::nalgebra::Point2::new(0., -Self::FONT_SIZE),
+                    Some(graphics::BLACK),
+                );
+
+                graphics::draw_queued_text(
+                    ctx,
+                    DrawParam::new(),
+                    None,
+                    graphics::FilterMode::Nearest,
+                )?;
+            }
         };
         graphics::present(ctx)
     }
