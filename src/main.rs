@@ -1053,6 +1053,7 @@ impl Level {
     ) -> bool {
         if self.player.update(ctx, &mut self.physics, &self.rails) {
             self.reset_level(level_info);
+            return false;
         }
 
         for (instance_id, tile) in self.tile_instances.iter_mut() {
@@ -1133,7 +1134,10 @@ impl Level {
                     ObjectType::Tile(tile_id, _) => {
                         let collided_tile = LevelInfo::get_tile_from_tile_id(tiles, tile_id);
                         match collided_tile.type_ {
-                            TileType::Spikes => self.reset_level(level_info),
+                            TileType::Spikes => {
+                                self.reset_level(level_info);
+                                return false;
+                            }
                             TileType::Exit => return true,
                             _ => (),
                         }
@@ -1151,21 +1155,28 @@ impl Level {
     }
 
     fn reset_level(&mut self, level_info: &LevelInfo) {
-        self.turn_off_gravity_machines();
+        for tile in self.tile_instances.values_mut() {
+            match &mut tile.extra_data {
+                TileData::GunData(ref mut gun_tile) => {
+                    for bullet in gun_tile.bullets.values() {
+                        self.physics.collider_set.remove(bullet.collider_handle);
+                        self.physics.body_set.remove(bullet.body_handle);
+                    }
+                    gun_tile.bullets = HashMap::new();
+                }
+                TileData::GravityData(ref mut is_on, _) => *is_on = false,
+                _ => (),
+            }
+        }
         self.player.entity.set_position(
             &mut self.physics,
             Tile::point_to_real(level_info.entrance.clone()),
         );
         self.physics
-            .set_gravity_dir(Direction::South, &mut self.player)
-    }
-
-    fn turn_off_gravity_machines(&mut self) {
-        for tile in self.tile_instances.values_mut() {
-            if let TileData::GravityData(ref mut is_on, _) = &mut tile.extra_data {
-                *is_on = false;
-            }
-        }
+            .set_gravity_dir(Direction::South, &mut self.player);
+        self.physics.geometrical_world.clear_events();
+        self.physics.step();
+        self.physics.ticks = 0;
     }
 
     pub fn draw(
