@@ -522,6 +522,7 @@ impl Entity {
 struct Player {
     entity: Entity,
     has_jumped: bool,
+    last_on_ground: (bool, bool),
 }
 
 impl Player {
@@ -546,6 +547,7 @@ impl Player {
         Self {
             entity,
             has_jumped: false,
+            last_on_ground: (true, true),
         }
     }
 
@@ -606,7 +608,9 @@ impl Player {
 
         // has_jumped ensures that player can jump in the very beginning, when
         // no collisions have been registered yet
-        if (on_ground || !self.has_jumped) && keyboard::is_key_pressed(ctx, KeyCode::Up) {
+        if (on_ground || self.last_on_ground.0 || !self.has_jumped)
+            && keyboard::is_key_pressed(ctx, KeyCode::Up)
+        {
             self.has_jumped = true;
             let jump_vector = physics.gravity_dir.to_point() * -Self::JUMP_POWER;
             let mut velocity = self.entity.velocity(physics);
@@ -614,6 +618,9 @@ impl Player {
             self.entity
                 .set_velocity(physics, add(jump_vector, velocity));
         }
+
+        self.last_on_ground.0 = self.last_on_ground.1;
+        self.last_on_ground.1 = on_ground;
 
         false
     }
