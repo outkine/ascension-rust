@@ -350,7 +350,7 @@ impl Physics {
             .filter_map(|event| match event {
                 ncollide2d::pipeline::narrow_phase::ContactEvent::Started(handle1, handle2) => self
                     .geometrical_world
-                    .contact_pair(&self.collider_set, *handle1, *handle2, true)
+                    .contact_pair(&self.collider_set, *handle1, *handle2, false)
                     .map(|(_, _, _, _, _, manifold)| {
                         (
                             self.retrieve_user_datas(*handle1, *handle2),
