@@ -1346,12 +1346,15 @@ impl LevelInfo {
         first_gid: Id,
         tilemap_size: (TileN, TileN),
     ) -> Vec<Self> {
-        let tilevec = tilemap_layer
-            .tiles
+        let tilevec = if let tiled::LayerData::Finite(tilevec) = tilemap_layer.tiles.clone() {
+            tilevec
             .iter()
             .flatten()
             .map(|layer_tile| apply_transformations(&layer_tile))
-            .collect::<Vec<Id>>();
+            .collect::<Vec<Id>>()
+        } else {
+            Vec::new()
+        };
 
         let tilematrix = na::DMatrix::from_vec(tilemap_size.0, tilemap_size.1, tilevec).map(|id| {
             id.checked_sub(first_gid)
